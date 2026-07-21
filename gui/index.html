@@ -405,10 +405,12 @@
         <h3>联网搜索选题</h3>
         <div class="sub">按你的账号领域搜索最新热点素材</div>
         <label class="field"><span class="cap">账号领域 / 关键词</span>
-          <input type="text" id="in-domain" placeholder="例如：AI 技术 开源 副业">
+          <input type="text" id="in-domain" placeholder="例如：AI 技术 开源 副业" list="history-domain">
+          <datalist id="history-domain"></datalist>
         </label>
         <label class="field"><span class="cap">额外搜索词（可空）</span>
-          <input type="text" id="in-extra" placeholder="例如：AI副业 裁员">
+          <input type="text" id="in-extra" placeholder="例如：AI副业 裁员" list="history-extra">
+          <datalist id="history-extra"></datalist>
         </label>
         <label class="field"><span class="cap">候选选题数量</span>
           <select id="in-want-n">
@@ -873,10 +875,40 @@ async function refreshState() {
 }
 
 /* ================= 页1 选题 ================= */
+// 历史记录管理（最近 3 条）
+function saveHistory(key, value) {
+  if (!value || !value.trim()) return;
+  const list = JSON.parse(localStorage.getItem(key) || "[]");
+  const filtered = list.filter(v => v !== value);  // 去重
+  filtered.unshift(value);                         // 插到最前
+  localStorage.setItem(key, JSON.stringify(filtered.slice(0, 3)));  // 只保留 3 条
+}
+function loadHistory(key, datalistId) {
+  const list = JSON.parse(localStorage.getItem(key) || "[]");
+  const dl = $(datalistId);
+  dl.innerHTML = "";
+  list.forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    dl.appendChild(opt);
+  });
+}
+
+// 页面加载时填充历史记录
+loadHistory("history-domain", "#history-domain");
+loadHistory("history-extra", "#history-extra");
+
 $("#btn-search").addEventListener("click", async () => {
   try {
+    const domain = $("#in-domain").value;
+    const extra = $("#in-extra").value;
+
+    // 保存到历史记录
+    saveHistory("history-domain", domain);
+    saveHistory("history-extra", extra);
+
     const { task } = await api("/api/topics/search", { method: "POST", body: {
-      domain: $("#in-domain").value, extra: $("#in-extra").value,
+      domain, extra,
       want_n: parseInt($("#in-want-n").value, 10) || 5,
     }});
     const result = await watchTask(task, $("#log-topic"), $("#btn-search"));
