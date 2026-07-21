@@ -743,9 +743,9 @@ SETTINGS_SCHEMA = [
         "fields": [
             {
                 "key": "SEARCH_PROVIDER",
-                "label": "搜索服务",
+                "label": "搜索服务（multi=已配Key的源一起搜）",
                 "type": "select",
-                "options": ["auto", "tavily", "bocha", "bing", "serper", "duckduckgo"],
+                "options": ["auto", "multi", "tavily", "bocha", "bing", "serper", "duckduckgo"],
             },
             {"key": "SEARCH_DOMAIN", "label": "账号领域关键词"},
             {"key": "TAVILY_API_KEY", "label": "Tavily Key", "secret": True},

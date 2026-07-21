@@ -2,12 +2,17 @@
 """真实联网搜索热门选题素材（无写死热门列表）。
 
 支持的搜索源（.env 里 SEARCH_PROVIDER）：
-  - auto      : 按已配置的 Key 自动选（tavily > bing > serper > duckduckgo）
+  - auto      : 按已配置的 Key 自动选（tavily > bocha > bing > serper > duckduckgo）
+  - multi     : 所有已配置 Key 的源并发一起搜，结果交错合并（推荐多 Key 用户）
   - tavily    : Tavily Search API（需 TAVILY_API_KEY）
   - bing      : 微软 Bing Web Search（需 BING_API_KEY）
   - serper    : Serper.dev Google 结果（需 SERPER_API_KEY）
   - duckduckgo: 免费网页检索（无需 Key，稳定性一般）
   - bocha     : 博查搜索（需 BOCHA_API_KEY，国内可用）
+
+新鲜度：各源默认只搜近期内容（tavily=week / bocha=oneMonth / bing=Week /
+serper=近一周 / ddg=w），配合检索词按日期轮换切入角度，
+同一领域每天搜到的素材自然不同。
 
 返回统一结构：
   [{"title","url","snippet","source","query"}, ...]
@@ -15,6 +20,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import time
@@ -23,6 +29,20 @@ from typing import Any
 from urllib.parse import quote_plus, unquote
 
 from http_util import request_json
+
+# 各搜索源对应的 Key 环境变量（multi 模式据此发现可用源）
+PROVIDER_KEY_ENV = {
+    "tavily": "TAVILY_API_KEY",
+    "bocha": "BOCHA_API_KEY",
+    "bing": "BING_API_KEY",
+    "serper": "SERPER_API_KEY",
+}
+
+# 每日轮换的检索切入角度：同一领域每天搜索方向不同，素材随之变化
+_DAILY_ANGLES = [
+    "避坑 教训", "真实案例", "方法 技巧", "工具 实操", "数据 报告",
+    "趋势 预测", "复盘 总结", "新手 入门", "误区 纠正", "清单 盘点",
+]
 
 
 def _headers() -> dict[str, str]:
@@ -37,11 +57,25 @@ def _headers() -> dict[str, str]:
     }
 
 
-def default_queries(domain: str = "", extra: str = "") -> list[str]:
-    """根据领域生成检索词（不是写死选题标题）。"""
+def configured_providers() -> list[str]:
+    """已配置 Key 的搜索源列表；一个都没配则退到免费 duckduckgo。"""
+    out = [p for p, env in PROVIDER_KEY_ENV.items() if os.getenv(env, "").strip()]
+    return out or ["duckduckgo"]
+
+
+def default_queries(domain: str = "", extra: str = "", day: datetime.date | None = None) -> list[str]:
+    """根据领域生成检索词（不是写死选题标题）。
+
+    day 参与角度轮换：同一领域在不同日期生成不同的检索组合，
+    保证「同一个提示词每天搜到的内容不一样」。
+    """
     domain = (domain or os.getenv("SEARCH_DOMAIN", "") or "公众号 个人成长 职场 副业").strip()
-    year = time.strftime("%Y")
+    d = day or datetime.date.today()
+    year = str(d.year)
+    month = f"{d.year}年{d.month}月"
+    angle = _DAILY_ANGLES[d.toordinal() % len(_DAILY_ANGLES)]
     base = [
+        f"{domain} {month} 热点 {angle}",
         f"{domain} {year} 公众号 10万+ 爆款 标题",
         f"{domain} 热门 公众号文章 高阅读",
         f"{domain} 微信公众号 刷屏 爆文",
@@ -91,6 +125,9 @@ def search_tavily(query: str, n: int = 8) -> list[dict[str, str]]:
             "search_depth": os.getenv("TAVILY_DEPTH", "basic"),
             "include_answer": False,
             "max_results": n,
+            # 只要近期内容（天数可调），保证素材新鲜、每天不同
+            "days": int(os.getenv("SEARCH_FRESH_DAYS", "7") or 7),
+            "topic": "general",
         },
         timeout=40,
     )
@@ -114,7 +151,13 @@ def search_bing(query: str, n: int = 8) -> list[dict[str, str]]:
         "GET",
         endpoint,
         headers={"Ocp-Apim-Subscription-Key": key, **_headers()},
-        params={"q": query, "count": n, "mkt": os.getenv("BING_MKT", "zh-CN"), "textDecorations": False},
+        params={
+            "q": query,
+            "count": n,
+            "mkt": os.getenv("BING_MKT", "zh-CN"),
+            "textDecorations": False,
+            "freshness": os.getenv("BING_FRESHNESS", "Week"),
+        },
         timeout=40,
     )
     items = []
@@ -133,7 +176,14 @@ def search_serper(query: str, n: int = 8) -> list[dict[str, str]]:
         "POST",
         "https://google.serper.dev/search",
         headers={"X-API-KEY": key, "Content-Type": "application/json"},
-        json_body={"q": query, "num": n, "gl": "cn", "hl": "zh-cn"},
+        json_body={
+            "q": query,
+            "num": n,
+            "gl": "cn",
+            "hl": "zh-cn",
+            # Google 时间过滤：qdr:w = 近一周
+            "tbs": os.getenv("SERPER_TBS", "qdr:w"),
+        },
         timeout=40,
     )
     items = []
@@ -154,7 +204,12 @@ def search_bocha(query: str, n: int = 8) -> list[dict[str, str]]:
         "POST",
         url,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json_body={"query": query, "count": n, "summary": True, "freshness": "noLimit"},
+        json_body={
+            "query": query,
+            "count": n,
+            "summary": True,
+            "freshness": os.getenv("BOCHA_FRESHNESS", "oneMonth"),
+        },
         timeout=40,
     )
     items = []
@@ -195,7 +250,10 @@ def search_duckduckgo(query: str, n: int = 8) -> list[dict[str, str]]:
         try:
             items = []
             with DDGS() as ddgs:
-                for it in ddgs.text(query, region="cn-zh", max_results=n):
+                for it in ddgs.text(
+                    query, region="cn-zh", max_results=n,
+                    timelimit=os.getenv("DDG_TIMELIMIT", "w") or None,  # w=近一周
+                ):
                     items.append(
                         _norm_item(
                             it.get("title", ""),
@@ -252,23 +310,68 @@ def search_duckduckgo(query: str, n: int = 8) -> list[dict[str, str]]:
 
 def resolve_provider(name: str = "") -> str:
     name = (name or os.getenv("SEARCH_PROVIDER", "auto") or "auto").strip().lower()
+    if name == "multi":
+        return "multi"
     if name != "auto":
         return name
-    if os.getenv("TAVILY_API_KEY", "").strip():
-        return "tavily"
-    if os.getenv("BOCHA_API_KEY", "").strip():
-        return "bocha"
-    if os.getenv("BING_API_KEY", "").strip():
-        return "bing"
-    if os.getenv("SERPER_API_KEY", "").strip():
-        return "serper"
-    return "duckduckgo"
+    # auto：配了多个 Key 时自动升级为 multi（并发全搜），单 Key 用该源
+    providers = configured_providers()
+    if providers == ["duckduckgo"]:
+        return "duckduckgo"
+    if len(providers) > 1:
+        return "multi"
+    return providers[0]
+
+
+def _interleave(groups: list[list[dict[str, str]]]) -> list[dict[str, str]]:
+    """多个源的结果交错合并（源1第1条、源2第1条…源1第2条…），保证来源多样性。"""
+    out: list[dict[str, str]] = []
+    idx = 0
+    while True:
+        added = False
+        for g in groups:
+            if idx < len(g):
+                out.append(g[idx])
+                added = True
+        if not added:
+            return out
+        idx += 1
+
+
+def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
+    """所有已配置 Key 的搜索源并发搜同一个词，结果交错合并。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    providers = configured_providers()
+    table = {
+        "tavily": search_tavily,
+        "bing": search_bing,
+        "serper": search_serper,
+        "bocha": search_bocha,
+        "duckduckgo": search_duckduckgo,
+    }
+    fns = [(p, table[p]) for p in providers if p in table]
+    groups: list[list[dict[str, str]]] = []
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=len(fns)) as pool:
+        futures = {pool.submit(fn, query, n): p for p, fn in fns}
+        for fut, p in futures.items():
+            try:
+                groups.append(fut.result(timeout=60))
+            except Exception as e:
+                errors.append(f"{p}: {e}")
+    if not groups:
+        raise RuntimeError("multi 搜索全部失败：" + "；".join(errors[:3]))
+    if errors:
+        print(f"[搜索] multi 部分源失败（不影响整体）：{'；'.join(errors[:3])}")
+    return _interleave(groups)
 
 
 def search_one(query: str, provider: str = "", n: int = 8) -> list[dict[str, str]]:
     provider = resolve_provider(provider)
     n = int(os.getenv("SEARCH_RESULTS_PER_QUERY", str(n)) or n)
     table = {
+        "multi": search_multi,
         "tavily": search_tavily,
         "bing": search_bing,
         "serper": search_serper,
@@ -292,7 +395,10 @@ def search_hot_materials(
     queries = default_queries(domain=domain, extra=extra_query)
     all_items: list[dict[str, str]] = []
     errors: list[str] = []
-    print(f"[搜索] provider={provider}")
+    if provider == "multi":
+        print(f"[搜索] provider=multi（并发源：{'+'.join(configured_providers())}）")
+    else:
+        print(f"[搜索] provider={provider}")
     for q in queries:
         print(f"  - 检索: {q}")
         try:

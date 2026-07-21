@@ -46,15 +46,26 @@ _UA_HEADERS = {
 # ---------------- 选题整理 ----------------
 def llm_rank_topics(materials: list[dict], domain: str, want_n: int = 5) -> list[dict]:
     """用大模型把真实搜索结果整理成可选选题（不是写死列表）。"""
+    import datetime
+
     from topic_search import materials_to_prompt_block
 
     block = materials_to_prompt_block(materials)
+    today = datetime.date.today()
+    # 与 topic_search._DAILY_ANGLES 同步的轮换角度：同一领域每天侧重不同
+    angles = [
+        "避坑与教训", "真实案例拆解", "方法与技巧", "工具实操", "数据与报告解读",
+        "趋势预测", "复盘总结", "新手入门", "常见误区纠正", "清单式盘点",
+    ]
+    angle_today = angles[today.toordinal() % len(angles)]
     system = (
         "你是公众号主编，擅长从真实热点素材里提炼可写爆文选题。\n"
         "必须基于给定搜索结果，禁止编造不存在的文章标题链接。\n"
         "输出严格 JSON 数组，不要 markdown 代码围栏。"
     )
     user = (
+        f"今天是 {today.isoformat()}，本日选题侧重方向：{angle_today}"
+        f"（在合适素材上优先往这个角度提炼，避免与往日选题同质化）。\n"
         f"领域/账号方向：{domain or '综合成长/职场/副业'}\n"
         f"请从下列真实搜索结果中，提炼 {want_n} 个适合公众号的候选选题。\n"
         "每个元素字段：\n"
