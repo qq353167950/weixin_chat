@@ -893,11 +893,25 @@ function renderTopics(topics) {
   topics.forEach((t, i) => {
     const div = document.createElement("div");
     div.className = "topic-card";
-    div.innerHTML = `
-      <div class="t-title"><span>${t.title}</span>
-        ${t.score !== "" ? `<span class="score-badge">潜力 ${t.score}</span>` : ""}</div>
-      <div class="t-meta">${t.type} · ${t.audience || "大众读者"}<br>
-        角度：${t.angle || "—"}<br>理由：${t.why || "—"}</div>`;
+    // 手工构建 DOM 避免 innerHTML 转义问题（选题标题可能含 <>&" 等字符）
+    const title = document.createElement("div");
+    title.className = "t-title";
+    const titleSpan = document.createElement("span");
+    titleSpan.textContent = t.title;  // textContent 自动转义
+    title.appendChild(titleSpan);
+    if (t.score !== "") {
+      const badge = document.createElement("span");
+      badge.className = "score-badge";
+      badge.textContent = `潜力 ${t.score}`;
+      title.appendChild(badge);
+    }
+    const meta = document.createElement("div");
+    meta.className = "t-meta";
+    // 转义所有字段（虽然是 LLM 返回，但可能含特殊字符）
+    const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    meta.innerHTML = `${esc(t.type)} · ${esc(t.audience || "大众读者")}<br>角度：${esc(t.angle || "—")}<br>理由：${esc(t.why || "—")}`;
+    div.appendChild(title);
+    div.appendChild(meta);
     div.addEventListener("click", async () => {
       $$(".topic-card").forEach(c => c.classList.remove("selected"));
       div.classList.add("selected");
@@ -1216,7 +1230,11 @@ async function loadHistory() {
       box.appendChild(row);
     });
   } catch (e) {
-    box.innerHTML = `<p class="muted">加载失败：${e.message}</p>`;
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = `加载失败：${e.message}`;  // textContent 自动转义
+    box.innerHTML = "";
+    box.appendChild(p);
   }
 }
 
