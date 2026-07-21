@@ -22,6 +22,9 @@ runs/
 build/
 dist/
 
+# 内置更新下载的安装包
+update/
+
 # 样例产出
 samples/last_preview.wechat.html
 samples/demo.wechat.html

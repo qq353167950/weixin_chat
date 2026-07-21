@@ -271,6 +271,66 @@
   /* 未保存标记 */
   .dirty-dot { color: var(--orange); font-weight: 600; }
 
+  /* ============ 编辑器工具栏 + 分栏实时预览 ============ */
+  .md-toolbar {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    padding: 8px 10px; margin-bottom: 10px;
+    background: rgba(0,0,0,0.03); border-radius: var(--radius-m);
+  }
+  .md-toolbar button {
+    border: none; background: transparent; cursor: pointer; font-family: inherit;
+    min-width: 32px; height: 30px; padding: 0 8px; border-radius: 7px;
+    font-size: 13px; color: var(--text); transition: background .15s;
+  }
+  .md-toolbar button:hover { background: rgba(0,0,0,0.07); }
+  .md-toolbar .tb-sep {
+    width: 1px; height: 18px; background: var(--hairline); margin: 0 4px; flex: none;
+  }
+  .md-toolbar select {
+    width: auto; padding: 4px 8px; font-size: 12px; height: 30px;
+    background: transparent; border-radius: 7px;
+  }
+  .md-toolbar select:hover { background: rgba(0,0,0,0.07); }
+  .tb-color {
+    display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+    height: 30px; padding: 0 8px; border-radius: 7px; font-size: 14px; font-weight: 700;
+  }
+  .tb-color:hover { background: rgba(0,0,0,0.07); }
+  .tb-color input[type=color] {
+    width: 20px; height: 20px; padding: 0; border: none; background: none; cursor: pointer;
+  }
+
+  .editor-split {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch;
+  }
+  @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
+  .editor-split textarea { height: 560px; resize: vertical; }
+  .live-wrap {
+    border: 1px solid var(--hairline); border-radius: var(--radius-m);
+    overflow: hidden; display: flex; flex-direction: column; background: #fff;
+  }
+  .live-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 14px; font-size: 12px; color: var(--text-2);
+    background: rgba(0,0,0,0.03); border-bottom: 1px solid var(--hairline); flex: none;
+  }
+  .live-preview {
+    flex: 1; overflow-y: auto; padding: 16px 18px; min-height: 0; max-height: 560px;
+  }
+  .theme-seg.mini { padding: 2px; }
+  .theme-seg.mini button { padding: 3px 10px; font-size: 12px; }
+
+  /* 密钥输入框眼睛按钮 */
+  .secret-wrap { position: relative; display: block; }
+  .secret-wrap input { padding-right: 42px; }
+  .eye-btn {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: none; background: transparent; cursor: pointer;
+    font-size: 15px; opacity: .45; padding: 4px 8px; border-radius: 6px;
+    transition: opacity .15s;
+  }
+  .eye-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+
   /* 历史列表 */
   .run-row {
     display: flex; align-items: center; gap: 14px;
@@ -482,15 +542,55 @@
     </div>
     <div class="card" id="editor-card" style="display:none">
       <div class="row" style="justify-content:space-between; margin-bottom:12px">
-        <h3>文章编辑（Markdown）<span class="dirty-dot" id="dirty-dot" style="display:none">·未保存</span></h3>
+        <h3>文章编辑<span class="dirty-dot" id="dirty-dot" style="display:none">·未保存</span></h3>
         <div class="row">
           <span class="muted" id="art-chars"></span>
-          <button class="btn ghost" id="btn-preview-md">预览排版</button>
           <button class="btn secondary" id="btn-save-md">保存修改</button>
           <button class="btn" id="btn-goto-cover">下一步：封面</button>
         </div>
       </div>
-      <textarea id="md-editor" rows="22" spellcheck="false"></textarea>
+      <!-- 格式工具栏：作用于编辑器选中文本 -->
+      <div class="md-toolbar" id="md-toolbar">
+        <button data-md="bold" title="加粗（**文字**）"><b>B</b></button>
+        <button data-md="italic" title="斜体（*文字*）"><i>I</i></button>
+        <button data-md="strike" title="删除线（~~文字~~）"><s>S</s></button>
+        <button data-md="code" title="行内代码（`代码`）">&lt;/&gt;</button>
+        <span class="tb-sep"></span>
+        <button data-md="h2" title="小标题（## ）">H2</button>
+        <button data-md="h3" title="子标题（### ）">H3</button>
+        <button data-md="quote" title="引用（&gt; ）">❝</button>
+        <button data-md="ul" title="无序列表（- ）">•≡</button>
+        <button data-md="ol" title="有序列表（1. ）">1≡</button>
+        <span class="tb-sep"></span>
+        <select id="tb-font" title="字体（选中文字后选择）">
+          <option value="">字体</option>
+        </select>
+        <select id="tb-size" title="字号（选中文字后选择）">
+          <option value="">字号</option>
+          <option value="14px">14 小</option>
+          <option value="15px">15</option>
+          <option value="16px">16 默认</option>
+          <option value="17px">17</option>
+          <option value="18px">18 大</option>
+          <option value="20px">20</option>
+          <option value="22px">22 特大</option>
+        </select>
+        <label class="tb-color" title="文字颜色（选中文字后选择）">
+          A<input type="color" id="tb-color" value="#e64a19">
+        </label>
+        <button data-md="clear" title="清除选中文字的字体/字号/颜色格式">清除格式</button>
+      </div>
+      <!-- 分栏：左编辑 · 右最终效果实时预览 -->
+      <div class="editor-split">
+        <textarea id="md-editor" rows="24" spellcheck="false"></textarea>
+        <div class="live-wrap">
+          <div class="live-head">
+            <span>最终效果（微信排版实时渲染）</span>
+            <span class="theme-seg mini" id="theme-seg-editor"></span>
+          </div>
+          <div class="live-preview" id="live-preview"><p class="muted" style="padding:20px">加载中…</p></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -673,17 +773,24 @@
   </div>
 </div>
 
-<!-- 文章页排版预览弹层 -->
-<div class="mask" id="preview-mask">
-  <div class="modal-phone">
-    <div class="phone" style="margin:0 auto">
-      <div class="screen">
-        <div class="notch"></div>
-        <iframe id="md-preview-frame" title="排版预览"></iframe>
+<!-- 更新弹层：条目化更新内容 + 内置下载安装 -->
+<div class="mask" id="update-mask">
+  <div class="modal" style="max-width:460px;text-align:left">
+    <h3 style="text-align:center">发现新版本 <span id="up-ver"></span></h3>
+    <p style="text-align:center;margin-top:4px" class="muted">本次更新内容</p>
+    <ol id="up-items" style="margin:14px 0 4px 4px;padding-left:20px;font-size:14px;line-height:1.9;color:var(--text)"></ol>
+    <p class="muted" style="font-size:12px;margin-top:10px">
+      更新不会影响你的配置（.env）与历史文章产出。
+    </p>
+    <div id="up-progress" style="display:none;margin-top:14px">
+      <div style="height:6px;background:rgba(0,0,0,0.06);border-radius:3px;overflow:hidden">
+        <div id="up-bar" style="height:100%;width:0%;background:var(--blue);transition:width .3s"></div>
       </div>
+      <p class="muted" id="up-progress-text" style="text-align:center;margin-top:8px;font-size:12px">正在下载…</p>
     </div>
-    <div class="close-bar">
-      <button class="btn secondary" id="btn-close-preview">关闭预览</button>
+    <div class="row" style="justify-content:center;margin-top:20px" id="up-actions">
+      <button class="btn secondary" id="up-later">稍后再说</button>
+      <button class="btn" id="up-install">立即更新</button>
     </div>
   </div>
 </div>
@@ -1030,6 +1137,8 @@ async function loadArticle() {
   $("#btn-illustrate").style.display = "";
   setDirty(false);
   showAiChip(S.ai_hits || []);
+  renderThemeSegEditor();
+  refreshLivePreview();
 }
 
 function showAiChip(hits) {
@@ -1079,10 +1188,153 @@ async function saveArticle({ silent = false } = {}) {
 }
 $("#btn-save-md").addEventListener("click", () => saveArticle());
 
-/* 编辑即标记未保存 */
+/* 编辑即标记未保存 + 防抖刷新右侧实时预览 */
+let _liveTimer = null;
+async function refreshLivePreview() {
+  const md = $("#md-editor").value;
+  if (!md.trim()) { $("#live-preview").innerHTML = '<p class="muted" style="padding:20px">开始输入后这里实时显示最终排版效果</p>'; return; }
+  try {
+    const r = await api("/api/render_text", { method: "POST", body: { md, theme: S.theme }, timeoutMs: 15000 });
+    $("#live-preview").innerHTML = r.html;
+  } catch (_) { /* 渲染失败保持上一帧，不打扰输入 */ }
+}
+function scheduleLivePreview() {
+  clearTimeout(_liveTimer);
+  _liveTimer = setTimeout(refreshLivePreview, 500);
+}
 $("#md-editor").addEventListener("input", () => {
   setDirty(true);
   $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
+  scheduleLivePreview();
+});
+
+/* 编辑页内的主题切换（与发布页共用 S.theme） */
+function renderThemeSegEditor() {
+  const seg = $("#theme-seg-editor");
+  seg.innerHTML = "";
+  Object.entries(S.themes).forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label.split("·")[0].trim();
+    b.title = label;
+    b.classList.toggle("on", key === S.theme);
+    b.addEventListener("click", () => { S.theme = key; renderThemeSegEditor(); renderThemeSeg(); refreshLivePreview(); });
+    seg.appendChild(b);
+  });
+}
+
+/* ============ 编辑器格式工具栏 ============ */
+/* 对 textarea 选区包裹/插入 Markdown 或内联样式 */
+function edSurround(before, after, placeholder) {
+  const ed = $("#md-editor");
+  const s = ed.selectionStart, e = ed.selectionEnd;
+  const sel = ed.value.slice(s, e) || placeholder || "文字";
+  ed.setRangeText(before + sel + after, s, e, "select");
+  ed.focus();
+  ed.dispatchEvent(new Event("input"));
+}
+/* 行首前缀（标题/引用/列表）：作用于选区覆盖的每一行 */
+function edLinePrefix(prefix, ordered) {
+  const ed = $("#md-editor");
+  const v = ed.value;
+  let s = ed.selectionStart, e = ed.selectionEnd;
+  const ls = v.lastIndexOf("\n", s - 1) + 1;                 // 选区首行行首
+  let le = v.indexOf("\n", e); if (le < 0) le = v.length;    // 选区末行行尾
+  const block = v.slice(ls, le);
+  const lines = block.split("\n");
+  const out = lines.map((ln, i) => {
+    const clean = ln.replace(/^(#{1,6}\s+|>\s+|[-*+]\s+|\d+[.]\s+)/, "");
+    return (ordered ? `${i + 1}. ` : prefix) + clean;
+  }).join("\n");
+  ed.setRangeText(out, ls, le, "select");
+  ed.focus();
+  ed.dispatchEvent(new Event("input"));
+}
+/* 内联样式 span（字体/字号/颜色，排版引擎会透传安全样式） */
+function edSpanStyle(styleFrag) {
+  const ed = $("#md-editor");
+  const s = ed.selectionStart, e = ed.selectionEnd;
+  if (s === e) { toast("请先选中要设置的文字"); return; }
+  let sel = ed.value.slice(s, e);
+  // 已是本工具生成的 span：合并样式而不是嵌套
+  const m = sel.match(/^<span style="([^"]*)">([\s\S]*)<\/span>$/);
+  if (m) {
+    const prop = styleFrag.split(":")[0];
+    const kept = m[1].split(";").filter(x => x.trim() && !x.trim().startsWith(prop)).join(";");
+    sel = `<span style="${kept ? kept + ";" : ""}${styleFrag}">${m[2]}</span>`;
+  } else {
+    sel = `<span style="${styleFrag}">${sel}</span>`;
+  }
+  ed.setRangeText(sel, s, e, "select");
+  ed.focus();
+  ed.dispatchEvent(new Event("input"));
+}
+function edClearFormat() {
+  const ed = $("#md-editor");
+  const s = ed.selectionStart, e = ed.selectionEnd;
+  if (s === e) { toast("请先选中要清除格式的文字"); return; }
+  let sel = ed.value.slice(s, e);
+  sel = sel.replace(/<span style="[^"]*">([\s\S]*?)<\/span>/g, "$1");
+  ed.setRangeText(sel, s, e, "select");
+  ed.focus();
+  ed.dispatchEvent(new Event("input"));
+}
+
+$("#md-toolbar").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-md]");
+  if (!btn) return;
+  const act = btn.dataset.md;
+  if (act === "bold") edSurround("**", "**");
+  else if (act === "italic") edSurround("*", "*");
+  else if (act === "strike") edSurround("~~", "~~");
+  else if (act === "code") edSurround("`", "`", "代码");
+  else if (act === "h2") edLinePrefix("## ");
+  else if (act === "h3") edLinePrefix("### ");
+  else if (act === "quote") edLinePrefix("> ");
+  else if (act === "ul") edLinePrefix("- ");
+  else if (act === "ol") edLinePrefix("", true);
+  else if (act === "clear") edClearFormat();
+});
+
+/* 字体下拉：本机常见中文字体（前端探测可用性） */
+(function initFontSelect() {
+  const CANDIDATES = [
+    ["微软雅黑", "Microsoft YaHei"], ["宋体", "SimSun"], ["黑体", "SimHei"],
+    ["楷体", "KaiTi"], ["仿宋", "FangSong"], ["苹方", "PingFang SC"],
+    ["华文细黑", "STXihei"], ["华文楷体", "STKaiti"], ["幼圆", "YouYuan"],
+    ["隶书", "LiSu"], ["等线", "DengXian"], ["Arial", "Arial"],
+    ["Georgia", "Georgia"], ["Courier New", "Courier New"],
+  ];
+  const sel = $("#tb-font");
+  const probe = (name) => {
+    try { return document.fonts.check(`16px "${name}"`); } catch (_) { return true; }
+  };
+  CANDIDATES.forEach(([label, family]) => {
+    if (!probe(family)) return;
+    const opt = document.createElement("option");
+    opt.value = family;
+    opt.textContent = label;
+    opt.style.fontFamily = family;
+    sel.appendChild(opt);
+  });
+})();
+$("#tb-font").addEventListener("change", (e) => {
+  if (e.target.value) edSpanStyle(`font-family:${e.target.value}`);
+  e.target.value = "";
+});
+$("#tb-size").addEventListener("change", (e) => {
+  if (e.target.value) edSpanStyle(`font-size:${e.target.value}`);
+  e.target.value = "";
+});
+$("#tb-color").addEventListener("input", (e) => {
+  edSpanStyle(`color:${e.target.value}`);
+});
+
+/* Ctrl+B/I 快捷键（编辑器内） */
+$("#md-editor").addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") { e.preventDefault(); edSurround("**", "**"); }
+  else if (k === "i") { e.preventDefault(); edSurround("*", "*"); }
 });
 
 /* Ctrl+S / Cmd+S 保存文章（拦截浏览器保存网页） */
@@ -1099,23 +1351,6 @@ document.addEventListener("keydown", (e) => {
 $("#btn-goto-cover").addEventListener("click", async () => {
   if (MD_DIRTY) await saveArticle({ silent: true });
   nav("cover");
-});
-
-/* 文章页排版预览弹层 */
-$("#btn-preview-md").addEventListener("click", async () => {
-  if (MD_DIRTY) {
-    const ok = await saveArticle({ silent: true });
-    if (!ok) return;
-  }
-  try {
-    const r = await api("/api/render", { method: "POST", body: { theme: S.theme }});
-    $("#md-preview-frame").srcdoc = r.preview;
-    $("#preview-mask").classList.add("show");
-  } catch (e) { toast("预览失败：" + e.message, 3000); }
-});
-$("#btn-close-preview").addEventListener("click", () => $("#preview-mask").classList.remove("show"));
-$("#preview-mask").addEventListener("click", (e) => {
-  if (e.target === $("#preview-mask")) $("#preview-mask").classList.remove("show");
 });
 
 $("#btn-illustrate").addEventListener("click", async () => {
@@ -1325,6 +1560,24 @@ async function loadRunsPage() {
         } catch (e) { toast("打开失败：" + e.message, 4000); }
       });
       row.appendChild(btn);
+      // 删除按钮（当前编辑中的不可删）
+      const del = document.createElement("button");
+      del.className = "btn ghost";
+      del.textContent = "删除";
+      del.style.color = "var(--red)";
+      del.disabled = !!r.current;
+      del.addEventListener("click", async () => {
+        const ok = await askConfirm("删除这条历史？",
+          `「${r.title || r.run}」的文章、封面、配图将全部删除，不可恢复。`);
+        if (!ok) return;
+        try {
+          await api("/api/runs/delete", { method: "POST", body: { run: r.run }});
+          row.remove();
+          toast("已删除");
+          if (!$("#history-body .run-row")) $("#history-body").innerHTML = '<p class="muted">还没有历史产出</p>';
+        } catch (e) { toast("删除失败：" + e.message, 4000); }
+      });
+      row.appendChild(del);
       box.appendChild(row);
     });
   } catch (e) {
@@ -1373,9 +1626,25 @@ async function loadSettings() {
         // value 需完整转义：.env 值可能含 & < > "（如 URL 带查询参数）
         const safeVal = String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;")
           .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-        lab.innerHTML = `<span class="cap">${f.label}</span>
-          <input type="${f.secret ? "password" : "text"}" data-key="${f.key}" value="${safeVal}"
-                 placeholder="${f.secret ? "••••••" : ""}" autocomplete="off">`;
+        if (f.secret) {
+          // 密钥输入框：带眼睛按钮，点击切换明文/圆点
+          lab.innerHTML = `<span class="cap">${f.label}</span>
+            <span class="secret-wrap">
+              <input type="password" data-key="${f.key}" value="${safeVal}"
+                     placeholder="••••••" autocomplete="off">
+              <button type="button" class="eye-btn" title="显示/隐藏">👁</button>
+            </span>`;
+          const inp = lab.querySelector("input");
+          lab.querySelector(".eye-btn").addEventListener("click", (ev) => {
+            const show = inp.type === "password";
+            inp.type = show ? "text" : "password";
+            ev.currentTarget.style.opacity = show ? "1" : "";
+          });
+        } else {
+          lab.innerHTML = `<span class="cap">${f.label}</span>
+            <input type="text" data-key="${f.key}" value="${safeVal}"
+                   placeholder="" autocomplete="off">`;
+        }
         grid.appendChild(lab);
       }
     });
@@ -1507,17 +1776,67 @@ async function checkUpdate(manual = false) {
   try {
     const r = await api("/api/check_update", { timeoutMs: 15000 });
     if (r.has_update) {
-      const msg = `发现新版本 v${r.remote_version}\n\n更新内容：\n${r.changelog || "查看 GitHub Release 页面"}\n\n点「确认」打开下载页面。你的配置（.env）与历史产出不会受影响。`;
-      const ok = await askConfirm("有新版本可用", msg);
-      if (ok && r.download_url) {
-        window.open(r.download_url, "_blank");
-      }
+      showUpdateDialog(r);
     } else if (manual) {
       toast(r.error ? "检查失败：" + r.error : "已是最新版本 ✓", 3000);
     }
   } catch (e) {
     if (manual) toast("检查更新失败：" + e.message, 3500);
   }
+}
+
+/* 更新弹层：1. 2. 3. 条目化展示 + 内置下载安装 */
+function showUpdateDialog(info) {
+  $("#up-ver").textContent = "v" + info.remote_version;
+  const ol = $("#up-items");
+  ol.innerHTML = "";
+  const items = (info.changelog_items && info.changelog_items.length)
+    ? info.changelog_items : ["性能优化与问题修复"];
+  items.forEach(t => {
+    const li = document.createElement("li");
+    li.textContent = t;
+    ol.appendChild(li);
+  });
+  $("#up-progress").style.display = "none";
+  $("#up-actions").style.display = "";
+  $("#update-mask").classList.add("show");
+
+  $("#up-later").onclick = () => $("#update-mask").classList.remove("show");
+  $("#up-install").onclick = async () => {
+    // Windows 安装包走内置更新；其他平台/绿色版回退浏览器下载
+    const isSetup = /setup.*\.exe$/i.test(info.download_url || "");
+    if (!isSetup) {
+      if (info.download_url) window.open(info.download_url, "_blank");
+      $("#update-mask").classList.remove("show");
+      return;
+    }
+    $("#up-actions").style.display = "none";
+    $("#up-progress").style.display = "";
+    try {
+      await api("/api/update/download", { method: "POST", body: { url: info.download_url }});
+      while (true) {
+        const p = await api("/api/update/progress", { timeoutMs: 8000 });
+        $("#up-bar").style.width = (p.percent || 0) + "%";
+        $("#up-progress-text").textContent =
+          p.status === "downloading" ? `正在下载… ${p.percent || 0}%` :
+          p.status === "ready" ? "下载完成，正在启动安装…" : "准备中…";
+        if (p.status === "ready") break;
+        if (p.status === "error") throw new Error(p.error || "下载失败");
+        await new Promise(res => setTimeout(res, 600));
+      }
+      await api("/api/update/install", { method: "POST" });
+      $("#up-progress-text").textContent = "安装程序已启动，本程序即将退出…";
+      // 程序马上被 os._exit 结束，页面显示告别文案
+      setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">正在安装新版本，请跟随安装向导完成更新</div>';
+      }, 800);
+    } catch (e) {
+      $("#up-progress").style.display = "none";
+      $("#up-actions").style.display = "";
+      toast("更新失败：" + e.message + "，可到 GitHub 手动下载", 5000);
+      if (info.download_url) window.open(info.download_url, "_blank");
+    }
+  };
 }
 
 $("#btn-version").addEventListener("click", () => checkUpdate(true));

@@ -166,9 +166,28 @@ class _Renderer:
         self.h2_count = 0
 
     # ---------- 行内格式 ----------
+    # 编辑器工具栏生成的内联样式 span：只透传严格白名单内的属性
+    # 注意 escape(quote=False) 不转义双引号，这里直接匹配 "
+    _SAFE_SPAN_RE = re.compile(
+        r'&lt;span style="((?:\s*(?:font-family|font-size|color)\s*:[^;"<>&]{1,60};?)+)"&gt;'
+        r'(.*?)&lt;/span&gt;',
+        re.S,
+    )
+
+    def _restore_safe_spans(self, text: str) -> str:
+        """把被转义的白名单 span 还原为真实标签（微信支持内联样式）。"""
+        def _repl(m: re.Match) -> str:
+            style = m.group(1).strip().rstrip(";")
+            return f'<span style="{style};">{m.group(2)}</span>'
+
+        return self._SAFE_SPAN_RE.sub(_repl, text)
+
     def inline(self, text: str) -> str:
-        """转义 + 行内 Markdown。顺序：转义 → 行内代码保护 → 图片 → 链接 → 粗斜删。"""
+        """转义 + 行内 Markdown。顺序：转义 → 白名单 span 还原 → 行内代码保护 → 图片 → 链接 → 粗斜删。"""
         text = html_mod.escape(text, quote=False)
+
+        # 编辑器字体/字号/颜色 span（其他任何 HTML 保持转义原样显示）
+        text = self._restore_safe_spans(text)
 
         # 行内代码先抠出来保护，避免内部 * _ 被再处理
         code_slots: list[str] = []
@@ -420,10 +439,29 @@ def _split_table_row(line: str) -> list[str]:
     return [c.strip() for c in row.split("|")]
 
 
+def _strip_outer_fence(md: str) -> str:
+    """剥掉包住整篇文章的代码围栏。
+
+    LLM 常把全文包在 ```markdown ... ``` 里输出，此时渲染引擎会把
+    整篇当一个大代码块 → 草稿箱里全文被框在代码框里。仅当围栏在
+    首尾且中间没有成对围栏时才剥（正文里的真代码块不受影响）。
+    """
+    text = md.strip()
+    m = re.match(r"^```[a-zA-Z]*\s*\n(.*)\n```\s*$", text, flags=re.S)
+    if not m:
+        return md
+    inner = m.group(1)
+    # 中间还有围栏说明首尾的 ``` 各自属于内部代码块，不能剥
+    if "```" in inner:
+        return md
+    return inner
+
+
 def markdown_to_wechat_html(md: str, theme: str = "default") -> str:
     """正文 Markdown → 公众号可粘贴的内联样式 HTML。"""
     cfg = THEMES.get(theme, THEMES["default"])
     r = _Renderer(cfg)
+    md = _strip_outer_fence(md)
     lines = md.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
     blocks: list[str] = []

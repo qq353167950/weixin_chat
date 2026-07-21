@@ -34,6 +34,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; 安装时自动关闭正在运行的程序（内置更新依赖此项接管旧进程）
+CloseApplications=yes
+RestartApplications=no
 ; 非管理员也可安装（选不了 Program Files 时装用户目录）
 PrivilegesRequiredOverridesAllowed=dialog
 

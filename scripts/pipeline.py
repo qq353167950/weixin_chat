@@ -336,6 +336,9 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
                 print("没有读到内容，请重试")
                 continue
 
+        # LLM 偶尔把全文包在 ```markdown 围栏里 → 整篇被渲染成代码框
+        from markdown_to_wechat_html import _strip_outer_fence
+        md_text = _strip_outer_fence(md_text)
         if not md_text.lstrip().startswith("#"):
             md_text = f"# {topic['title']}\n\n{md_text}"
 

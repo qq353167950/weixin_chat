@@ -55,6 +55,7 @@ from generate_cover_ai import generate_ai_cover  # noqa: E402
 from llm_client import llm_chat, llm_config  # noqa: E402
 from markdown_to_wechat_html import (  # noqa: E402
     THEMES,
+    _strip_outer_fence,
     build_preview_html,
     extract_title_and_body,
     make_digest,
@@ -369,9 +370,112 @@ def api_check_update():
             "remote_version": remote_ver if has else __version__,
             "download_url": download_url,
             "changelog": changelog,
+            "changelog_items": _friendly_changelog(changelog) if has else [],
             "error": changelog if not has and changelog else "",
         }
     )
+
+
+def _friendly_changelog(raw: str, limit: int = 8) -> list[str]:
+    """把 Release Notes 提炼成 1. 2. 3. 条目文案。
+
+    优先取 markdown 列表行（- / *），剥掉链接与格式符号；
+    没有列表时按句/行切分取要点。
+    """
+    items: list[str] = []
+    for ln in (raw or "").splitlines():
+        s = ln.strip()
+        m = re.match(r"^[-*]\s+(.+)$", s)
+        if not m:
+            continue
+        text = m.group(1)
+        text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)     # 链接→文字
+        text = re.sub(r"[*_`#]+", "", text).strip()              # 去格式符
+        text = re.sub(r"\s+by\s+@\S+.*$", "", text)              # 去 PR 署名尾巴
+        text = re.sub(r"\s+in\s+https?://\S+$", "", text)
+        if text and len(text) > 3:
+            items.append(text)
+    if not items:
+        # 无列表：按行取非空文本
+        for ln in (raw or "").splitlines():
+            s = re.sub(r"[*_`#>]+", "", ln).strip()
+            if s and not s.startswith("!"):
+                items.append(s)
+    return items[:limit]
+
+
+UPDATE_STATE = {"status": "idle", "percent": 0, "error": "", "file": ""}
+
+
+@app.post("/api/update/download")
+def api_update_download():
+    """内置更新：后台下载安装包 → 就绪后由 /api/update/install 启动安装。
+
+    仅 Windows 安装包（setup.exe）支持静默接管；其余平台仍走浏览器下载。
+    """
+    body = request.get_json(force=True) or {}
+    url = str(body.get("url") or "").strip()
+    if not url.startswith("https://github.com/"):
+        return jsonify({"error": "仅支持 GitHub Releases 下载地址"}), 400
+    with _LOCK:
+        if UPDATE_STATE["status"] == "downloading":
+            return jsonify({"error": "已在下载中"}), 409
+        UPDATE_STATE.update({"status": "downloading", "percent": 0, "error": "", "file": ""})
+
+    def worker():
+        import urllib.request as _ur
+
+        try:
+            dest = ROOT / "update"
+            dest.mkdir(parents=True, exist_ok=True)
+            fname = dest / url.rsplit("/", 1)[-1]
+            req = _ur.Request(url, headers={"User-Agent": "weixin-chat-updater"})
+            with _ur.urlopen(req, timeout=30) as resp, open(fname, "wb") as f:
+                total = int(resp.headers.get("Content-Length") or 0)
+                got = 0
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        with _LOCK:
+                            UPDATE_STATE["percent"] = int(got * 100 / total)
+            with _LOCK:
+                UPDATE_STATE.update({"status": "ready", "percent": 100, "file": str(fname)})
+        except Exception as e:
+            with _LOCK:
+                UPDATE_STATE.update({"status": "error", "error": str(e)})
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/update/progress")
+def api_update_progress():
+    with _LOCK:
+        return jsonify(dict(UPDATE_STATE))
+
+
+@app.post("/api/update/install")
+def api_update_install():
+    """启动已下载的安装包并退出当前程序（安装器会等待本进程退出后覆盖）。"""
+    with _LOCK:
+        if UPDATE_STATE["status"] != "ready" or not UPDATE_STATE["file"]:
+            return jsonify({"error": "安装包未就绪"}), 400
+        installer = UPDATE_STATE["file"]
+    import subprocess
+
+    # /CLOSEAPPLICATIONS 让 Inno 安装器自动关占用文件的进程；
+    # 先分离启动安装器，再延迟退出自身，安装器等待期极短
+    subprocess.Popen(
+        [installer, "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
+        close_fds=True,
+        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+    )
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+    return jsonify({"ok": True})
 
 
 @app.post("/api/new_run")
@@ -440,6 +544,26 @@ def api_runs_cover(name: str):
     if not (d / "cover.jpg").exists():
         return jsonify({"error": "无封面"}), 404
     return send_from_directory(d, "cover.jpg")
+
+
+@app.post("/api/runs/delete")
+def api_runs_delete():
+    """删除一条历史产出（整个 runs/<stamp> 目录）。当前正在编辑的不允许删。"""
+    name = str((request.get_json(force=True) or {}).get("run") or "").strip()
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+        return jsonify({"error": "无效的记录名"}), 400
+    wd = ROOT / "runs" / name
+    if not wd.is_dir():
+        return jsonify({"error": "记录不存在"}), 404
+    with _LOCK:
+        current = STATE["work_dir"]
+    if current is not None and Path(current).name == name:
+        return jsonify({"error": "该记录正在编辑中，请先「再写一篇」后再删除"}), 400
+    try:
+        shutil.rmtree(wd)
+    except OSError as e:
+        return jsonify({"error": f"删除失败（文件可能被占用）：{e}"}), 500
+    return jsonify({"ok": True})
 
 
 @app.post("/api/runs/open")
@@ -590,6 +714,8 @@ def api_article_write():
             md_text = llm_chat(
                 build_article_prompt(topic, topic.get("user_extra", ""), refs_block)
             )
+        # LLM 偶尔把全文包在 ```markdown 围栏里 → 渲染成一整个代码框
+        md_text = _strip_outer_fence(md_text)
         if not md_text.lstrip().startswith("#"):
             md_text = f"# {topic['title']}\n\n{md_text}"
         # 兜底：清掉模型塞进正文的引用角标链接
@@ -733,6 +859,21 @@ def _preview_payload(theme: str) -> dict:
         "preview": page,
         "theme": theme,
     }
+
+
+@app.post("/api/render_text")
+def api_render_text():
+    """把请求体里的 Markdown 直接渲染为微信排版 HTML（编辑器实时预览用，不落盘）。"""
+    body = request.get_json(force=True) or {}
+    md_text = str(body.get("md") or "")
+    theme = str(body.get("theme") or STATE["theme"])
+    if theme not in THEMES:
+        theme = "default"
+    _, body_md = extract_title_and_body(md_text) if md_text.lstrip().startswith("#") else ("", md_text)
+    html = markdown_to_wechat_html(body_md, theme=theme)
+    # 相对图片路径 → GUI 静态路由
+    html = re.sub(r'src="(images/[^"]+)"', r'src="/runfile/\1"', html)
+    return jsonify({"html": html, "theme": theme})
 
 
 @app.post("/api/render")
