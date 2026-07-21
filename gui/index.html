@@ -388,6 +388,7 @@
     <button class="env-pill" data-page="settings" id="env-pill">
       <span class="env-dot" id="env-dot"></span>设置
     </button>
+    <button class="env-pill" id="btn-version" title="点击检查更新">v<span id="version-text">...</span></button>
     <button class="env-pill" id="btn-quit-app" style="display:none" title="停止本地服务并退出">退出</button>
   </div>
 </nav>
@@ -1403,6 +1404,37 @@ async function resumeRunningTasks() {
   }
 }
 
+/* ============ 版本更新检查 ============ */
+async function loadVersion() {
+  try {
+    const r = await apiFetch("/api/version");
+    $("#version-text").textContent = r.version;
+  } catch (e) {
+    $("#version-text").textContent = "?";
+  }
+}
+
+async function checkUpdate(manual = false) {
+  try {
+    const r = await apiFetch("/api/check_update");
+    if (r.has_update) {
+      const msg = `发现新版本 v${r.remote_version}\n\n更新内容：\n${r.changelog || '查看 GitHub Release 页面'}\n\n点击「确定」前往下载页面`;
+      const ok = await askConfirm("有新版本可用", msg);
+      if (ok && r.download_url) {
+        window.open(r.download_url, '_blank');
+      }
+    } else if (manual) {
+      await showTip("已是最新版本", "success");
+    }
+  } catch (e) {
+    if (manual) {
+      await showTip(`检查更新失败：${e.message}`, "error");
+    }
+  }
+}
+
+$("#btn-version").onclick = () => checkUpdate(true);
+
 (async function init() {
   await refreshState();
   renderThemeSeg();
@@ -1411,6 +1443,9 @@ async function resumeRunningTasks() {
   if (S.topics && S.topics.length) renderTopics(S.topics);
   maybeShowWelcome();
   await resumeRunningTasks();
+  // 加载版本号并自动检查更新（不弹窗打扰用户）
+  await loadVersion();
+  checkUpdate(false);  // 后台静默检查，有更新才弹窗
 })();
 </script>
 </body>

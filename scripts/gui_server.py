@@ -63,6 +63,7 @@ from markdown_to_wechat_html import (  # noqa: E402
 from topic_search import resolve_provider, search_hot_materials  # noqa: E402
 from task_hooks import TaskCancelled as TaskCancelledHook  # noqa: E402
 from task_hooks import clear_hooks, set_hooks  # noqa: E402
+from version import __version__, check_update  # noqa: E402
 from wechat_client import WeChatClient  # noqa: E402
 
 app = Flask(__name__)
@@ -313,6 +314,39 @@ def api_state():
             "publish": publish,
             "tasks": running,
             "env": _env_summary(),
+        }
+    )
+
+
+@app.get("/api/version")
+def api_version():
+    """返回当前版本号。"""
+    return jsonify({"version": __version__})
+
+
+@app.get("/api/check_update")
+def api_check_update():
+    """检查是否有新版本可用。
+
+    返回：
+      {
+        "has_update": bool,
+        "current_version": str,
+        "remote_version": str,
+        "download_url": str,
+        "changelog": str,
+        "error": str  # 仅失败时有
+      }
+    """
+    has, remote_ver, download_url, changelog = check_update()
+    return jsonify(
+        {
+            "has_update": has,
+            "current_version": __version__,
+            "remote_version": remote_ver if has else __version__,
+            "download_url": download_url,
+            "changelog": changelog,
+            "error": changelog if not has and changelog else "",
         }
     )
 
