@@ -1,0 +1,79 @@
+# 推送自动打包 Windows exe
+#
+# 触发方式：
+#   - push 到 main / master：构建并上传 Artifact（Actions 页面下载，保留 30 天）
+#   - push 形如 v1.0.0 的 tag：构建并自动创建 GitHub Release，exe 作为附件
+#   - 手动触发（workflow_dispatch）
+#
+# 注意：本项目验证均在本地完成（selftest + 实测），CI 仅负责打包分发。
+
+name: 打包 Windows EXE
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # 创建 Release 需要
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: 离线冒烟自测（排版/封面/预览，不调外部 API）
+        run: python scripts/selftest.py
+
+      - name: PyInstaller 打包
+        run: pyinstaller build.spec --noconfirm --clean
+
+      - name: 冒烟验证 exe 可启动
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\wechat-assistant.exe" -PassThru -WorkingDirectory (New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force)
+          Start-Sleep -Seconds 15
+          try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8093/" -UseBasicParsing -TimeoutSec 10
+            if ($resp.StatusCode -ne 200) { throw "首页返回 $($resp.StatusCode)" }
+            $state = Invoke-WebRequest -Uri "http://127.0.0.1:8093/api/state" -UseBasicParsing -TimeoutSec 10
+            if ($state.StatusCode -ne 200) { throw "/api/state 返回 $($state.StatusCode)" }
+            Write-Host "exe 启动冒烟通过"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: 上传构建产物（Artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: wechat-assistant-windows
+          path: dist/wechat-assistant.exe
+          retention-days: 30
+
+      - name: 发布 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/wechat-assistant.exe
+          generate_release_notes: true
+          body: |
+            ## 公众号助手 Windows 单文件版
+
+            **使用方法**：下载 `wechat-assistant.exe`，放到任意文件夹双击运行。
+            首次运行会在同目录自动生成 `.env` 配置文件，可在浏览器打开的
+            设置页里填写各项 Key。产出保存在同目录 `runs/` 下。
+
+            无需安装 Python，无需任何依赖。

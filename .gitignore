@@ -18,6 +18,10 @@ runs/
 # 依赖安装标记（bat 生成）
 .venv-requirements.hash
 
+# PyInstaller 构建产物（build.spec 本身入库）
+build/
+dist/
+
 # 样例产出
 samples/last_preview.wechat.html
 samples/demo.wechat.html

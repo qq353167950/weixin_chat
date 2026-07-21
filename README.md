@@ -1,6 +1,7 @@
 # 一键：公众号写作 → 排版 → 草稿箱
 
-> **两种用法，推荐图形界面：**
+> **三种用法，推荐图形界面：**
+> - **单文件 exe**（免装 Python）：从 GitHub Releases 下载 `wechat-assistant.exe`，放任意文件夹双击运行；首次运行自动在同目录生成 `.env`，产出在同目录 `runs/`
 > - **图形界面**：双击 `GUI.bat`，浏览器打开苹果风格操作页（选题 → 文章 → 封面 → 预览发布 → 设置）
 > - **命令行**：双击 `START_HERE.bat`，终端交互式全流程
 >
@@ -133,7 +134,7 @@ wechat-auto-publish-windows/
 
 ---
 
-## 6. 本地验证
+## 6. 本地验证与打包
 
 ```bash
 # 离线冒烟自测（排版/摘要/封面/预览，不调任何外部 API）
@@ -141,6 +142,18 @@ python scripts/selftest.py
 
 # 排版 dry-run（不调微信）
 python scripts/one_click_publish.py --md samples/demo.md --dry-run
+
+# 本地打包单文件 exe（产物 dist/wechat-assistant.exe）
+build_exe.bat
+```
+
+**自动打包**：推送到 GitHub 后，Actions 自动构建 Windows exe：
+- push 到 `main` → Actions 页面下载构建产物（保留 30 天）
+- push 标签 `v1.0.0` 这类 → 自动创建 Release，exe 作为附件
+
+```bash
+# 发一个版本
+git tag v1.0.0 && git push origin main --tags
 ```
 
 ---

@@ -27,9 +27,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
-ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from app_paths import app_root, asset_dir, ensure_env_file  # noqa: E402
+
+ROOT = app_root()          # 可写：.env / runs
+ASSETS = asset_dir()       # 只读：gui 页面（打包后位于 _MEIPASS）
+
+ensure_env_file()
 load_dotenv(ROOT / ".env")
 load_dotenv()
 
@@ -209,7 +214,7 @@ def _env_summary() -> dict:
 # ---------------- 页面与运行文件 ----------------
 @app.get("/")
 def index():
-    return send_from_directory(ROOT / "gui", "index.html")
+    return send_from_directory(ASSETS / "gui", "index.html")
 
 
 @app.get("/favicon.ico")
