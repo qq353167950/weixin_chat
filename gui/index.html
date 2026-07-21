@@ -876,19 +876,27 @@ async function refreshState() {
 }
 
 /* ================= 页1 选题 ================= */
-// 历史记录管理（最近 3 条）
+// 历史记录管理（最近 3 条）。localStorage 损坏时静默重置，不炸脚本
+function readHistory(key) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(v) ? v.filter(x => typeof x === "string") : [];
+  } catch (_) {
+    localStorage.removeItem(key);
+    return [];
+  }
+}
 function saveHistory(key, value) {
   if (!value || !value.trim()) return;
-  const list = JSON.parse(localStorage.getItem(key) || "[]");
+  const list = readHistory(key);
   const filtered = list.filter(v => v !== value);  // 去重
   filtered.unshift(value);                         // 插到最前
   localStorage.setItem(key, JSON.stringify(filtered.slice(0, 3)));  // 只保留 3 条
 }
 function loadHistory(key, datalistId) {
-  const list = JSON.parse(localStorage.getItem(key) || "[]");
   const dl = $(datalistId);
   dl.innerHTML = "";
-  list.forEach(v => {
+  readHistory(key).forEach(v => {
     const opt = document.createElement("option");
     opt.value = v;
     dl.appendChild(opt);
@@ -907,6 +915,8 @@ $("#btn-search").addEventListener("click", async () => {
     // 保存到历史记录
     saveHistory("history-domain", domain);
     saveHistory("history-extra", extra);
+    loadHistory("history-domain", "#history-domain");
+    loadHistory("history-extra", "#history-extra");
 
     const { task } = await api("/api/topics/search", { method: "POST", body: {
       domain, extra,
@@ -1303,8 +1313,11 @@ async function loadSettings() {
       } else {
         const lab = document.createElement("label");
         lab.className = "field";
+        // value 需完整转义：.env 值可能含 & < > "（如 URL 带查询参数）
+        const safeVal = String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         lab.innerHTML = `<span class="cap">${f.label}</span>
-          <input type="${f.secret ? "password" : "text"}" data-key="${f.key}" value="${String(val).replace(/"/g, "&quot;")}"
+          <input type="${f.secret ? "password" : "text"}" data-key="${f.key}" value="${safeVal}"
                  placeholder="${f.secret ? "••••••" : ""}" autocomplete="off">`;
         grid.appendChild(lab);
       }

@@ -120,6 +120,14 @@ def _reject_if_busy():
     return None
 
 
+class TaskBusyError(RuntimeError):
+    """已有任务运行时试图启动新任务（互斥由 _new_task 在锁内原子保证）。"""
+
+    def __init__(self, running: dict):
+        super().__init__(f"「{running['name']}」正在进行中")
+        self.running = running
+
+
 def _new_task(name: str) -> dict:
     task = {
         "id": uuid.uuid4().hex[:12],
@@ -132,6 +140,11 @@ def _new_task(name: str) -> dict:
         "error": "",
     }
     with _LOCK:
+        # 互斥检查必须与登记同锁完成：_reject_if_busy 的预检存在
+        # 两请求同时通过的竞态，这里是最终防线
+        for t in TASKS.values():
+            if t["status"] == "running":
+                raise TaskBusyError(t)
         _evict_finished_tasks()
         TASKS[task["id"]] = task
     return task
@@ -142,6 +155,7 @@ def _run_task(name: str, fn) -> dict:
 
     通过 task_hooks 把取消探针与进度回调下沉到耗时循环内部
     （LLM 流式分块、逐条检索、逐图上传），取消秒级生效。
+    并发启动时抛 TaskBusyError（由 Flask errorhandler 统一转 409）。
     """
     task = _new_task(name)
 
@@ -255,6 +269,15 @@ def _env_summary() -> dict:
 
 
 # ---------------- 页面与运行文件 ----------------
+@app.errorhandler(TaskBusyError)
+def _on_task_busy(e: TaskBusyError):
+    """互斥兜底：并发穿过预检时在 _new_task 锁内拦下，统一 409。"""
+    return (
+        jsonify({"error": f"{e}，请等它完成或先取消", "task": e.running["id"]}),
+        409,
+    )
+
+
 @app.get("/")
 def index():
     return send_from_directory(ASSETS / "gui", "index.html")

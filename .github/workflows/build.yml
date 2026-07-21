@@ -41,6 +41,17 @@ jobs:
       - name: 离线冒烟自测（排版/封面/预览，不调外部 API）
         run: python scripts/selftest.py
 
+      - name: 校验版本号与 tag 一致（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tagVer = "$env:GITHUB_REF" -replace "refs/tags/v",""
+          $codeVer = python -c "import sys; sys.path.insert(0,'scripts'); from version import __version__; print(__version__)"
+          if ($tagVer -ne $codeVer) {
+            throw "版本不一致：tag=v$tagVer 但 version.py=$codeVer。请先更新 scripts/version.py 再打 tag。"
+          }
+          Write-Host "版本一致：v$codeVer"
+
       - name: PyInstaller 打包 exe
         run: pyinstaller build.spec --noconfirm --clean
 
