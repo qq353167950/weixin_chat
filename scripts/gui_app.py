@@ -5,6 +5,10 @@
   - 后台线程跑 gui_server 的 Flask 应用（127.0.0.1，端口被占则自动换）
   - pywebview 起原生窗口（Windows 下为 Edge WebView2 内核），加载本地服务
   - 关闭窗口即退出整个程序（Flask 线程为 daemon）
+  - 未保存确认：前端通过 js_api 桥把脏状态推给 Python 侧变量，
+    关窗事件里只读变量 + 原生 MessageBox —— 严禁在 closing 事件里
+    evaluate_js（UI 线程互等会死锁，表现为关窗卡住）
+  - 窗口化 exe 无控制台，stdout/stderr 重定向到数据目录 app.log
   - WebView2 运行时缺失等异常时回退到系统浏览器，功能不受影响
 
 用法：
@@ -23,11 +27,50 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from app_paths import app_root  # noqa: E402
+
+# 窗口化 exe（console=False）里 stdout/stderr 为 None，任何 print 都会抛
+# AttributeError；重定向到日志文件，业务模块的 print 原样保留
+if sys.stdout is None or sys.stderr is None:
+    _log = open(app_root() / "app.log", "a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = _log
+    if sys.stderr is None:
+        sys.stderr = _log
+
 import gui_server  # noqa: E402
 
 WINDOW_TITLE = "公众号助手"
 WINDOW_SIZE = (1180, 800)
 MIN_SIZE = (980, 640)
+
+
+class Bridge:
+    """暴露给页面 JS 的桥（window.pywebview.api.*）。"""
+
+    def __init__(self) -> None:
+        self.dirty = False
+
+    def set_dirty(self, value: bool) -> None:
+        """前端编辑器脏状态变化时同步过来，供关窗确认使用。"""
+        self.dirty = bool(value)
+
+
+def confirm_quit_native() -> bool:
+    """原生确认框（Win32 MessageBox），可安全运行在 UI 线程。"""
+    try:
+        import ctypes
+
+        idyes = 6
+        # MB_YESNO | MB_ICONWARNING | MB_TOPMOST
+        return (
+            ctypes.windll.user32.MessageBoxW(
+                None, "文章有未保存的修改，确定退出吗？", WINDOW_TITLE, 0x04 | 0x30 | 0x40000
+            )
+            == idyes
+        )
+    except Exception:
+        return True  # 非 Windows 或调用失败：不阻塞退出
 
 
 def pick_port(preferred: int) -> int:
@@ -93,24 +136,21 @@ def main() -> int:
     try:
         import webview
 
+        bridge = Bridge()
         window = webview.create_window(
             WINDOW_TITLE,
             url,
+            js_api=bridge,
             width=WINDOW_SIZE[0],
             height=WINDOW_SIZE[1],
             min_size=MIN_SIZE,
             background_color="#f5f5f7",   # 与页面底色一致，加载时不闪白
         )
-        # 拦截窗口关闭：编辑器有未保存修改时先确认（复用前端 MD_DIRTY 状态）
+
         def on_closing():
-            try:
-                dirty = window.evaluate_js("window.MD_DIRTY === true")
-                if dirty:
-                    return window.evaluate_js(
-                        "window.confirm('文章有未保存的修改，确定退出吗？')"
-                    )
-            except Exception:
-                pass
+            # 只读 Python 侧变量，绝不在此调 evaluate_js（会死锁）
+            if bridge.dirty:
+                return confirm_quit_native()
             return True
 
         window.events.closing += on_closing

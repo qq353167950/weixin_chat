@@ -3,6 +3,9 @@
 
 只读 LLM_* 配置，不与生图、搜索共用密钥。
 每次请求使用短生命周期 Session，结束后强制关闭连接。
+
+默认流式（LLM_STREAM=1）：长文写作可能超过 100 秒，中转站（Cloudflare 等）
+对无数据的长连接会返回 HTTP 524 网关超时；流式让分块持续到达，连接不会被掐。
 """
 
 from __future__ import annotations
@@ -10,9 +13,10 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+import time
+from typing import Any, Iterable
 
-from http_util import request_json
+from http_util import request_json, with_session
 
 
 def llm_config() -> dict[str, str]:
@@ -20,6 +24,56 @@ def llm_config() -> dict[str, str]:
     base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
     model = os.getenv("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
     return {"api_key": api_key, "base": base, "model": model}
+
+
+def parse_sse_content(lines: Iterable[str]) -> str:
+    """从 SSE 行流拼出 chat.completion.chunk 的 delta 内容（纯函数，便于自测）。"""
+    parts: list[str] = []
+    for raw in lines:
+        if not raw or not raw.startswith("data:"):
+            continue
+        data = raw[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            obj = json.loads(data)
+            delta = (obj.get("choices") or [{}])[0].get("delta") or {}
+            piece = delta.get("content") or ""
+        except Exception:
+            continue
+        if piece:
+            parts.append(piece)
+    return "".join(parts)
+
+
+def _chat_stream(url: str, headers: dict, payload: dict, timeout: int, retries: int) -> str:
+    """流式请求：read 超时按“相邻分块间隔”计，总时长不受网关空闲超时限制。"""
+    payload = dict(payload)
+    payload["stream"] = True
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            def _do(sess):
+                with sess.post(
+                    url, headers=headers, json=payload,
+                    timeout=(20, timeout), stream=True,
+                ) as r:
+                    if r.status_code >= 400:
+                        body = re.sub(r"<[^>]+>", " ", r.text or "")[:200]
+                        raise RuntimeError(f"HTTP {r.status_code}: {body.strip()}")
+                    text = parse_sse_content(r.iter_lines(decode_unicode=True))
+                if not text.strip():
+                    raise RuntimeError("流式响应为空")
+                return text.strip()
+
+            return with_session(_do)
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                print(f"[写作大模型] 流式重试 {attempt}/{retries}: {e}")
+                time.sleep(1.5 * attempt)
+                continue
+    raise RuntimeError(f"流式请求失败: {last_err}")
 
 
 def llm_chat(
@@ -54,13 +108,22 @@ def llm_chat(
         payload["max_tokens"] = max_tokens
     print(f"[写作大模型] model={cfg['model']} base={cfg['base']}")
     timeout = int(os.getenv("LLM_TIMEOUT_SEC", "180") or 180)
+    retries = int(os.getenv("LLM_HTTP_RETRIES", "3") or 3)
+
+    # 默认流式；个别中转不支持时自动回退非流式（LLM_STREAM=0 可强制关闭）
+    if os.getenv("LLM_STREAM", "1") != "0":
+        try:
+            return _chat_stream(url, headers, payload, timeout, retries)
+        except Exception as e:
+            print(f"[写作大模型] 流式不可用（{e}），回退非流式")
+
     data = request_json(
         "POST",
         url,
         headers=headers,
         json_body=payload,
         timeout=timeout,
-        retries=int(os.getenv("LLM_HTTP_RETRIES", "3") or 3),
+        retries=retries,
     )
     try:
         return data["choices"][0]["message"]["content"].strip()

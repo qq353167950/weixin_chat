@@ -1,13 +1,18 @@
-# 推送自动打包 Windows exe
+# 推送自动打包桌面客户端（Windows exe + 安装包 / macOS .app）
 #
 # 触发方式：
 #   - push 到 main / master：构建并上传 Artifact（Actions 页面下载，保留 30 天）
-#   - push 形如 v1.0.0 的 tag：构建并自动创建 GitHub Release，exe 作为附件
+#   - push 形如 v1.0.0 的 tag：构建并自动创建 GitHub Release，三个产物作附件
 #   - 手动触发（workflow_dispatch）
+#
+# 产物：
+#   wechat-assistant.exe                 Windows 绿色版（win10/win11）
+#   wechat-assistant-setup-vX.Y.Z.exe    Windows 安装包（选目录/桌面快捷方式/卸载器）
+#   wechat-assistant-macos.zip           macOS .app（Intel/Apple Silicon 由 runner 架构决定）
 #
 # 注意：本项目验证均在本地完成（selftest + 实测），CI 仅负责打包分发。
 
-name: 打包 Windows EXE
+name: 打包桌面客户端
 
 on:
   push:
@@ -18,8 +23,6 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    permissions:
-      contents: write   # 创建 Release 需要
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -38,13 +41,12 @@ jobs:
       - name: 离线冒烟自测（排版/封面/预览，不调外部 API）
         run: python scripts/selftest.py
 
-      - name: PyInstaller 打包
+      - name: PyInstaller 打包 exe
         run: pyinstaller build.spec --noconfirm --clean
 
-      - name: 冒烟验证 exe 可启动
+      - name: 冒烟验证 exe 可启动（--server 模式）
         shell: pwsh
         run: |
-          # 桌面 exe 无控制台，CI 无显示环境 → 用 --server 模式仅起 HTTP 服务冒烟
           $proc = Start-Process -FilePath "dist\公众号助手.exe" -ArgumentList "--server" -PassThru -WorkingDirectory (New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force)
           Start-Sleep -Seconds 20
           try {
@@ -57,31 +59,121 @@ jobs:
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }
 
+      - name: 确定版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ("$env:GITHUB_REF" -like "refs/tags/v*") { "$env:GITHUB_REF" -replace "refs/tags/v","" } else { "0.0.0-dev" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: 安装 Inno Setup 中文语言文件
+        shell: pwsh
+        run: |
+          $dest = "${env:ProgramFiles(x86)}\Inno Setup 6\Languages\ChineseSimplified.isl"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_5_1/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile $dest
+          if (-not (Test-Path $dest)) { throw "中文语言文件下载失败" }
+
+      - name: 编译安装包（Inno Setup）
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\installer.iss"
+          Get-ChildItem dist
+
+      - name: 统一产物文件名（Release 附件不支持中文）
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          Copy-Item "dist\公众号助手.exe" "dist\wechat-assistant.exe"
+          Copy-Item "dist\公众号助手-安装包-v$env:APP_VERSION.exe" "dist\wechat-assistant-setup-v$env:APP_VERSION.exe"
+
       - name: 上传构建产物（Artifact）
         uses: actions/upload-artifact@v4
         with:
           name: wechat-assistant-windows
-          path: dist/公众号助手.exe
+          path: |
+            dist/wechat-assistant.exe
+            dist/wechat-assistant-setup-*.exe
           retention-days: 30
 
-      - name: 发布 Release（仅 tag 触发）
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        # GitHub Release 附件不支持非 ASCII 文件名（会变成 default.exe），先复制为英文名
-        run: Copy-Item "dist\公众号助手.exe" "dist\wechat-assistant.exe"
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: 离线冒烟自测
+        run: python scripts/selftest.py
+
+      - name: PyInstaller 打包 .app
+        run: pyinstaller build.spec --noconfirm --clean
+
+      - name: 冒烟验证 .app 内可执行文件可启动（--server 模式）
+        run: |
+          "./dist/公众号助手.app/Contents/MacOS/公众号助手" --server &
+          APP_PID=$!
+          sleep 20
+          curl -sf http://127.0.0.1:8093/ > /dev/null || { echo "首页请求失败"; kill $APP_PID; exit 1; }
+          curl -sf http://127.0.0.1:8093/api/state > /dev/null || { echo "/api/state 请求失败"; kill $APP_PID; exit 1; }
+          echo "mac 启动冒烟通过"
+          kill $APP_PID
+
+      - name: 压缩 .app（保留可执行权限）
+        run: cd dist && ditto -c -k --keepParent "公众号助手.app" wechat-assistant-macos.zip
+
+      - name: 上传构建产物（Artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: wechat-assistant-macos
+          path: dist/wechat-assistant-macos.zip
+          retention-days: 30
+
+  release:
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
 
       - name: 创建 Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/wechat-assistant.exe
+          files: |
+            dist/wechat-assistant-setup-*.exe
+            dist/wechat-assistant.exe
+            dist/wechat-assistant-macos.zip
           generate_release_notes: true
           body: |
-            ## 公众号助手 Windows 桌面客户端
+            ## 公众号助手 桌面客户端
 
-            **使用方法**：下载 `wechat-assistant.exe`，放到任意文件夹双击运行。
-            打开的是独立桌面窗口（非浏览器），首次运行自动在同目录生成
-            `.env` 配置文件，可在设置页填写各项 Key。产出保存在同目录 `runs/` 下。
+            | 文件 | 平台 | 说明 |
+            |------|------|------|
+            | `wechat-assistant-setup-v*.exe` | Windows 10/11 | **推荐**：安装向导（选目录、桌面快捷方式、卸载器） |
+            | `wechat-assistant.exe` | Windows 10/11 | 绿色版：放任意文件夹双击即用 |
+            | `wechat-assistant-macos.zip` | macOS | 解压得 `公众号助手.app`，拖入「应用程序」 |
 
-            无需安装 Python，无需任何依赖。需要 Windows 10/11
-            自带的 Edge WebView2（绝大多数系统已内置；缺失时自动回退浏览器模式）。
+            首次启动有配置引导：填写作模型 Key 与公众号 AppID/AppSecret 即可开写。
+            数据位置：Windows 安装版在 `%APPDATA%\公众号助手`，绿色版在 exe 同目录；
+            macOS 在 `~/Library/Application Support/公众号助手`。
+
+            无需安装 Python。Windows 需系统自带 Edge WebView2（缺失自动回退浏览器）。
+            macOS 首次打开若提示「无法验证开发者」：右键 .app → 打开（未做公证属正常）。
