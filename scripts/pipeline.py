@@ -385,7 +385,11 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
             if out.exists():
                 _maybe_illustrate(out, work_dir)
                 return out
+            print(f"[提示] 未找到 {out}，将重新进入生成流程")
         if act == "4":
+            # 整体替换：残留旧字段（尤其 user_extra 里追加的重写指令）
+            # 会污染新选题的写作提示词
+            topic.clear()
             topic.update(step_select_topic(work_dir))
             continue
 

@@ -345,8 +345,9 @@ def _interleave(groups: list[list[dict[str, str]]]) -> list[dict[str, str]]:
 def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
     """所有已配置 Key 的搜索源并发搜同一个词，结果交错合并。
 
-    用 as_completed + 总超时：不被最慢的源拖死（此前逐个 result(60s)
-    最坏等待为各源之和）。超时未回的源计入失败，不阻塞整体。
+    用 wait + 总超时：不被最慢的源拖死。注意不能用 with 语法——
+    退出时 shutdown(wait=True) 会阻塞等挂死的源真正返回，总超时形同虚设；
+    改为 shutdown(wait=False, cancel_futures=True)，挂死线程留给 daemon 回收。
     """
     from concurrent.futures import ThreadPoolExecutor, wait
 
@@ -362,7 +363,8 @@ def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
     overall = float(os.getenv("SEARCH_MULTI_TIMEOUT", "45") or 45)
     groups: list[list[dict[str, str]]] = []
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(fns)) as pool:
+    pool = ThreadPoolExecutor(max_workers=len(fns), thread_name_prefix="search")
+    try:
         futures = {pool.submit(fn, query, n): p for p, fn in fns}
         done, pending = wait(futures, timeout=overall)
         for fut in done:
@@ -373,7 +375,8 @@ def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
                 errors.append(f"{p}: {e}")
         for fut in pending:
             errors.append(f"{futures[fut]}: 超过 {overall:.0f}s 未响应，放弃")
-            fut.cancel()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     if not groups:
         raise RuntimeError("multi 搜索全部失败：" + "；".join(errors[:3]))
     if errors:

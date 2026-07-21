@@ -547,12 +547,18 @@ def api_article_write():
     mode = str(body.get("mode") or "llm")
     extra = str(body.get("user_extra") or "").strip()
     with _LOCK:
-        topic = STATE["topic"]
-        if topic and extra:
-            topic["user_extra"] = extra
+        src = STATE["topic"]
+        if src and extra:
+            src["user_extra"] = extra
+        topic = dict(src) if src else None   # job 线程用副本，避免锁外共享
     if not topic:
         return jsonify({"error": "请先选定选题"}), 400
     wd = _ensure_run()
+    if extra:
+        # 补充要求同步落盘：历史记录重新打开时不丢
+        (wd / "topic.json").write_text(
+            json.dumps(topic, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     def job(log):
         if mode == "fallback":

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import urllib.error
 import urllib.request
 from typing import Literal
 

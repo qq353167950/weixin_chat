@@ -763,10 +763,11 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
         await new Promise(r => setTimeout(r, 1200));
         continue;
       }
-      for (; shown < t.log.length; shown++) {
+      const logs = t.log || [];   // 任务被后端清理时无 log 字段，防炸
+      for (; shown < logs.length; shown++) {
         const div = document.createElement("div");
-        div.textContent = t.log[shown];
-        if (/成功|完成|干净/.test(t.log[shown])) div.className = "okline";
+        div.textContent = logs[shown];
+        if (/成功|完成|干净/.test(logs[shown])) div.className = "okline";
         consoleEl.appendChild(div);
       }
       // 进度行/取消行保持在末尾（appendChild 对已有节点是移动）
@@ -810,9 +811,10 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
 
 /* ================= 页面切换 ================= */
 const PAGES = ["topic", "article", "cover", "publish", "settings", "history"];
-function nav(page) {
-  // 离开文章页时若有未保存内容，自动保存（静默，失败不阻断）
-  if (MD_DIRTY && page !== "article") saveArticle({ silent: true });
+async function nav(page) {
+  // 离开文章页时若有未保存内容，先保存完再切（否则预览拿到旧文、
+  // 切回文章页时 GET 竞争可能用旧内容覆盖编辑器导致修改丢失）
+  if (MD_DIRTY && page !== "article") await saveArticle({ silent: true });
   PAGES.forEach(p => {
     $(`#page-${p}`).classList.toggle("show", p === page);
     const btn = $(`.nav-step[data-page=${p}]`) || $(`.env-pill[data-page=${p}]`);
@@ -821,7 +823,7 @@ function nav(page) {
   if (page === "publish") renderPreview();
   if (page === "settings") loadSettings();
   if (page === "article") syncArticlePage();
-  if (page === "history") loadHistory();
+  if (page === "history") loadRunsPage();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 $$("[data-page]").forEach(el => el.addEventListener("click", () => nav(el.dataset.page)));
@@ -845,8 +847,8 @@ window.addEventListener("beforeunload", (e) => {
 
 async function refreshState() {
   S = await api("/api/state");
-  // 顶栏配置状态点：四项全就绪才绿
-  const ok = S.env.wechat && S.env.llm && S.env.image_key;
+  // 顶栏配置状态点：两项必填（写作模型+微信）就绪即绿；生图/搜索为可选
+  const ok = S.env.wechat && S.env.llm;
   $("#env-dot").classList.toggle("ok", !!ok);
   // 步骤完成态
   $(".nav-step[data-page=topic]").classList.toggle("done", !!S.topic);
@@ -860,6 +862,7 @@ async function refreshState() {
     $("#pub-cover-chip").textContent = "已就绪";
     $("#pub-cover-chip").className = "chip ok";
   } else {
+    $("#btn-goto-publish").disabled = true;   // 新一篇/历史无封面时重新禁用
     $("#pub-cover-chip").textContent = "未生成";
     $("#pub-cover-chip").className = "chip warn";
   }
@@ -942,7 +945,7 @@ function renderTopics(topics) {
     const titleSpan = document.createElement("span");
     titleSpan.textContent = t.title;  // textContent 自动转义
     title.appendChild(titleSpan);
-    if (t.score !== "") {
+    if (t.score !== "" && t.score != null) {
       const badge = document.createElement("span");
       badge.className = "score-badge";
       badge.textContent = `潜力 ${t.score}`;
@@ -1213,6 +1216,14 @@ function resetUiForRun() {
   ["log-topic", "log-article", "log-cover", "log-publish"].forEach(id =>
     $(`#${id}`).classList.remove("show"));
   $("#cover-box").innerHTML = "还没有封面";
+  // 文章页残留：上一篇的选题标题/AI腔标签/按钮态/字数
+  $("#art-topic-title").textContent = "未选定选题";
+  $("#art-topic-meta").textContent = "";
+  $("#art-chars").textContent = "";
+  $("#chip-ai").style.display = "none";
+  $("#btn-rewrite").style.display = "none";
+  $("#btn-illustrate").style.display = "none";
+  $("#btn-goto-article").disabled = true;
   // 清掉发布页的手动修改标记，让新文章的标题/摘要能重新回填
   ["pub-title", "pub-digest", "pub-author"].forEach(id => {
     const el = $(`#${id}`);
@@ -1230,7 +1241,7 @@ $("#btn-new-run").addEventListener("click", async () => {
 });
 
 /* ================= 页6 历史 ================= */
-async function loadHistory() {
+async function loadRunsPage() {
   const box = $("#history-body");
   box.innerHTML = "加载中…";
   try {
@@ -1242,14 +1253,30 @@ async function loadHistory() {
       row.className = "run-row";
       const stamp = r.run.replace(
         /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}$/, "$1-$2-$3 $4:$5");
-      row.innerHTML = `
-        ${r.has_cover
-          ? `<img class="thumb" src="/api/runs/cover/${r.run}?t=${Date.now()}" alt="">`
-          : `<div class="thumb"></div>`}
-        <div class="info">
-          <div class="t">${r.title || "（未写文章）"}</div>
-          <div class="m">${stamp}${r.media_id ? " · 已进草稿箱" : ""}${r.current ? " · 当前" : ""}</div>
-        </div>`;
+      // 缩略图（路径由后端校验，安全）
+      if (r.has_cover) {
+        const img = document.createElement("img");
+        img.className = "thumb";
+        img.src = `/api/runs/cover/${r.run}?t=${Date.now()}`;
+        img.alt = "";
+        row.appendChild(img);
+      } else {
+        const ph = document.createElement("div");
+        ph.className = "thumb";
+        row.appendChild(ph);
+      }
+      // 标题可能含 <>& 等字符（来自 LLM/用户），必须 textContent
+      const info = document.createElement("div");
+      info.className = "info";
+      const t = document.createElement("div");
+      t.className = "t";
+      t.textContent = r.title || "（未写文章）";
+      const m = document.createElement("div");
+      m.className = "m";
+      m.textContent = stamp + (r.media_id ? " · 已进草稿箱" : "") + (r.current ? " · 当前" : "");
+      info.appendChild(t);
+      info.appendChild(m);
+      row.appendChild(info);
       const btn = document.createElement("button");
       btn.className = "btn secondary";
       btn.textContent = r.current ? "编辑中" : "打开";
@@ -1339,15 +1366,11 @@ $("#btn-save-settings").addEventListener("click", async () => {
   } catch (e) { toast("失败：" + e.message, 4000); }
 });
 
-/* 浏览器回退模式：显示「退出」按钮（桌面窗口关窗即退，无需此入口） */
-(function initQuitBtn() {
-  const inDesktop = !!window.pywebview;
-  // pywebview 注入时机可能晚于脚本执行，延迟再判一次
-  setTimeout(() => {
-    if (!window.pywebview) $("#btn-quit-app").style.display = "";
-  }, 1500);
-  if (inDesktop) return;
-})();
+/* 浏览器回退模式：显示「退出」按钮（桌面窗口关窗即退，无需此入口）
+   pywebview 注入时机可能晚于脚本执行，延迟判定 */
+setTimeout(() => {
+  if (!window.pywebview) $("#btn-quit-app").style.display = "";
+}, 1500);
 $("#btn-quit-app").addEventListener("click", async () => {
   const ok = await askConfirm("退出程序？", "将停止本地服务，未保存的编辑会丢失。");
   if (!ok) return;

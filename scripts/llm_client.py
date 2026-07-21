@@ -123,11 +123,15 @@ def llm_chat(
     timeout = int(os.getenv("LLM_TIMEOUT_SEC", "180") or 180)
     retries = int(os.getenv("LLM_HTTP_RETRIES", "3") or 3)
 
-    # 默认流式；个别中转不支持时自动回退非流式（LLM_STREAM=0 可强制关闭）
+    # 默认流式；仅当中转不支持流式时回退非流式（LLM_STREAM=0 可强制关闭）。
+    # 认证/模型类硬错误（401/403/404）直接抛出：回退只会重复失败并掩盖首因
     if os.getenv("LLM_STREAM", "1") != "0":
         try:
             return _chat_stream(url, headers, payload, timeout, retries)
         except Exception as e:
+            msg = str(e)
+            if re.search(r"HTTP (401|403|404)", msg):
+                raise
             print(f"[写作大模型] 流式不可用（{e}），回退非流式")
 
     data = request_json(
