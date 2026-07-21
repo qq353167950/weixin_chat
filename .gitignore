@@ -1,0 +1,24 @@
+# 密钥配置（绝对不能入库）
+.env
+
+# Python 环境与缓存
+.venv/
+__pycache__/
+*.pyc
+
+# 每次流程产出（文章/封面/配图/HTML）
+runs/
+
+# IDE 与工具目录
+.idea/
+.claude/
+.agents/
+.keysmith-download/
+
+# 依赖安装标记（bat 生成）
+.venv-requirements.hash
+
+# 样例产出
+samples/last_preview.wechat.html
+samples/demo.wechat.html
+samples/cover.jpg

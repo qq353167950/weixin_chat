@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公众号助手</title>
+<style>
+  /* ============ 苹果式设计基座 ============ */
+  :root {
+    --bg: #f5f5f7;
+    --card: rgba(255,255,255,0.78);
+    --card-solid: #ffffff;
+    --text: #1d1d1f;
+    --text-2: #6e6e73;
+    --text-3: #aeaeb2;
+    --blue: #0071e3;
+    --blue-hover: #0077ed;
+    --green: #34c759;
+    --red: #ff3b30;
+    --orange: #ff9500;
+    --hairline: rgba(0,0,0,0.08);
+    --radius-l: 18px;
+    --radius-m: 12px;
+    --radius-s: 8px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.06);
+    --shadow-hover: 0 8px 32px rgba(0,0,0,0.10);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC",
+                 "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+
+  /* ============ 顶栏（毛玻璃） ============ */
+  .navbar {
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    background: rgba(255,255,255,0.72);
+    border-bottom: 0.5px solid var(--hairline);
+  }
+  .navbar-inner {
+    max-width: 1120px; margin: 0 auto; padding: 0 24px;
+    height: 52px; display: flex; align-items: center; gap: 20px;
+  }
+  .brand { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+  .brand .dot { color: var(--blue); }
+  .nav-steps { display: flex; gap: 4px; margin-left: 8px; flex: 1; }
+  .nav-step {
+    padding: 6px 14px; border-radius: 980px; font-size: 13px; color: var(--text-2);
+    cursor: pointer; transition: all .2s; border: none; background: transparent;
+    display: flex; align-items: center; gap: 6px; font-family: inherit;
+  }
+  .nav-step:hover { background: rgba(0,0,0,0.05); }
+  .nav-step.active { background: var(--text); color: #fff; }
+  .nav-step .num {
+    width: 17px; height: 17px; border-radius: 50%; font-size: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.08); color: var(--text-2); font-weight: 600;
+  }
+  .nav-step.active .num { background: rgba(255,255,255,0.25); color: #fff; }
+  .nav-step.done .num { background: var(--green); color: #fff; }
+  .env-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+    display: inline-block; margin-right: 6px;
+  }
+  .env-dot.ok { background: var(--green); }
+  .env-pill {
+    font-size: 12px; color: var(--text-2); cursor: pointer;
+    padding: 6px 12px; border-radius: 980px; border: none; background: transparent;
+    font-family: inherit; display: flex; align-items: center;
+  }
+  .env-pill:hover { background: rgba(0,0,0,0.05); }
+
+  /* ============ 主体布局 ============ */
+  .main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
+  .page { display: none; animation: fadein .3s ease; }
+  .page.show { display: block; }
+  @keyframes fadein { from { opacity:0; transform: translateY(8px);} to { opacity:1; transform:none;} }
+
+  .hero { text-align: center; margin: 8px 0 32px; }
+  .hero h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.5px; }
+  .hero p { color: var(--text-2); font-size: 15px; margin-top: 8px; }
+
+  .card {
+    background: var(--card); backdrop-filter: blur(20px);
+    border-radius: var(--radius-l); box-shadow: var(--shadow);
+    border: 0.5px solid rgba(255,255,255,0.6);
+    padding: 24px; margin-bottom: 20px; transition: box-shadow .3s;
+  }
+  .card:hover { box-shadow: var(--shadow-hover); }
+  .card h3 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+  .card .sub { color: var(--text-2); font-size: 13px; margin-bottom: 16px; }
+
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ============ 控件 ============ */
+  .btn {
+    appearance: none; border: none; cursor: pointer; font-family: inherit;
+    background: var(--blue); color: #fff; font-size: 14px; font-weight: 500;
+    padding: 10px 22px; border-radius: 980px; transition: all .2s;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:hover { background: var(--blue-hover); transform: scale(1.02); }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  .btn.secondary { background: rgba(0,0,0,0.06); color: var(--text); }
+  .btn.secondary:hover { background: rgba(0,0,0,0.1); }
+  .btn.ghost { background: transparent; color: var(--blue); padding: 10px 14px; }
+  .btn.ghost:hover { background: rgba(0,113,227,0.08); }
+  .btn.danger { background: var(--red); }
+  .btn.lg { font-size: 16px; padding: 14px 32px; }
+
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    font-family: inherit; font-size: 14px; color: var(--text);
+    background: rgba(0,0,0,0.04); border: 1px solid transparent;
+    border-radius: var(--radius-m); padding: 11px 14px; outline: none;
+    transition: all .2s; width: 100%;
+  }
+  input:focus, textarea:focus, select:focus {
+    background: #fff; border-color: var(--blue);
+    box-shadow: 0 0 0 4px rgba(0,113,227,0.12);
+  }
+  textarea { resize: vertical; line-height: 1.7; }
+  label.field { display: block; margin-bottom: 14px; }
+  label.field .cap { display:block; font-size: 12px; color: var(--text-2); margin-bottom: 6px; font-weight: 500; }
+
+  /* 开关 */
+  .switch { position: relative; width: 44px; height: 26px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute; inset: 0; border-radius: 980px; background: rgba(0,0,0,0.15);
+    transition: .25s; cursor: pointer;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; width: 22px; height: 22px; border-radius: 50%;
+    background: #fff; top: 2px; left: 2px; transition: .25s;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  }
+  .switch input:checked + .track { background: var(--green); }
+  .switch input:checked + .track::after { left: 20px; }
+
+  /* ============ 选题卡片 ============ */
+  .topic-card {
+    background: var(--card-solid); border-radius: var(--radius-m);
+    border: 1.5px solid var(--hairline); padding: 16px 18px; cursor: pointer;
+    transition: all .2s; margin-bottom: 12px;
+  }
+  .topic-card:hover { border-color: rgba(0,113,227,0.5); transform: translateY(-1px); }
+  .topic-card.selected { border-color: var(--blue); background: rgba(0,113,227,0.04); }
+  .topic-card .t-title { font-size: 15px; font-weight: 600; display:flex; justify-content: space-between; gap:8px;}
+  .topic-card .t-meta { font-size: 12px; color: var(--text-2); margin-top: 6px; line-height: 1.6; }
+  .score-badge {
+    flex: none; font-size: 12px; font-weight: 700; color: var(--orange);
+    background: rgba(255,149,0,0.12); padding: 2px 8px; border-radius: 6px; height: fit-content;
+  }
+
+  /* ============ 日志面板 ============ */
+  .console {
+    background: #1d1d1f; color: #e8e8ed; border-radius: var(--radius-m);
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    padding: 14px 16px; max-height: 220px; overflow-y: auto; line-height: 1.8;
+    display: none; white-space: pre-wrap; word-break: break-all;
+  }
+  .console.show { display: block; }
+  .console .err { color: #ff6961; }
+  .console .okline { color: #6fdd8b; }
+
+  /* ============ 预览手机壳 ============ */
+  .phone-wrap { display: flex; justify-content: center; }
+  .phone {
+    width: 390px; max-width: 100%; background: #000; border-radius: 44px;
+    padding: 10px; box-shadow: 0 12px 48px rgba(0,0,0,0.22);
+  }
+  .phone .screen {
+    background: #fff; border-radius: 36px; overflow: hidden; height: 700px; position: relative;
+  }
+  .phone iframe { width: 100%; height: 100%; border: none; }
+  .phone .notch {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 120px; height: 26px; background: #000; border-radius: 0 0 16px 16px; z-index: 5;
+  }
+
+  /* 主题选择胶囊 */
+  .theme-seg {
+    display: inline-flex; background: rgba(0,0,0,0.06); border-radius: 980px; padding: 3px; gap: 2px;
+  }
+  .theme-seg button {
+    border: none; background: transparent; font-family: inherit; font-size: 13px;
+    padding: 7px 16px; border-radius: 980px; cursor: pointer; color: var(--text-2); transition: all .2s;
+  }
+  .theme-seg button.on { background: #fff; color: var(--text); font-weight: 600; box-shadow: 0 1px 6px rgba(0,0,0,0.12); }
+
+  /* ============ 状态标签 ============ */
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 4px 12px; border-radius: 980px; background: rgba(0,0,0,0.05); color: var(--text-2);
+  }
+  .chip.ok { background: rgba(52,199,89,0.12); color: #1e8e3e; }
+  .chip.warn { background: rgba(255,149,0,0.12); color: #b25000; }
+  .chip.bad { background: rgba(255,59,48,0.1); color: #d70015; }
+
+  /* 封面预览 */
+  .cover-box {
+    border-radius: var(--radius-m); overflow: hidden; border: 1px solid var(--hairline);
+    background: rgba(0,0,0,0.03); aspect-ratio: 900/383;
+    display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px;
+  }
+  .cover-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* 设置组 */
+  .set-group { margin-bottom: 28px; }
+  .set-group h4 { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+  .set-group .gdesc { font-size: 12px; color: var(--text-2); margin-bottom: 14px; }
+  .set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+  @media (max-width: 760px) { .set-grid { grid-template-columns: 1fr; } }
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(0,0,0,0.03); border-radius: var(--radius-m); padding: 11px 14px;
+  }
+  .toggle-row .cap { font-size: 13px; color: var(--text); }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: rgba(29,29,31,0.92); color: #fff; font-size: 14px;
+    padding: 12px 24px; border-radius: 980px; opacity: 0; pointer-events: none;
+    transition: all .3s; z-index: 200; backdrop-filter: blur(10px);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.35);
+    border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  .btn.secondary .spinner, .btn.ghost .spinner { border-color: rgba(0,0,0,0.15); border-top-color: var(--text-2); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .success-panel {
+    text-align: center; padding: 40px 20px;
+  }
+  .success-panel .icon {
+    width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%;
+    background: rgba(52,199,89,0.12); display: flex; align-items: center; justify-content: center;
+    font-size: 30px; color: var(--green);
+  }
+  .muted { color: var(--text-2); font-size: 13px; }
+  .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-inner">
+    <div class="brand">公众号助手<span class="dot">.</span></div>
+    <div class="nav-steps">
+      <button class="nav-step" data-page="topic"><span class="num">1</span>选题</button>
+      <button class="nav-step" data-page="article"><span class="num">2</span>文章</button>
+      <button class="nav-step" data-page="cover"><span class="num">3</span>封面</button>
+      <button class="nav-step" data-page="publish"><span class="num">4</span>预览发布</button>
+    </div>
+    <button class="env-pill" data-page="settings" id="env-pill">
+      <span class="env-dot" id="env-dot"></span>设置
+    </button>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- ============ 页1 选题 ============ -->
+  <section class="page" id="page-topic">
+    <div class="hero">
+      <h1>今天写什么？</h1>
+      <p>真实联网搜索热点，大模型整理成候选选题，由你拍板</p>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>联网搜索选题</h3>
+        <div class="sub">按你的账号领域搜索最新热点素材</div>
+        <label class="field"><span class="cap">账号领域 / 关键词</span>
+          <input type="text" id="in-domain" placeholder="例如：AI 技术 开源 副业">
+        </label>
+        <label class="field"><span class="cap">额外搜索词（可空）</span>
+          <input type="text" id="in-extra" placeholder="例如：AI副业 裁员">
+        </label>
+        <div class="row">
+          <button class="btn" id="btn-search">开始搜索选题</button>
+          <span class="muted" id="search-hint"></span>
+        </div>
+        <div style="height:12px"></div>
+        <div class="console" id="log-topic"></div>
+      </div>
+      <div class="card">
+        <h3>或者，直接输入主题</h3>
+        <div class="sub">已有想法就不用搜索</div>
+        <label class="field"><span class="cap">主题 / 标题方向</span>
+          <input type="text" id="in-custom-title" placeholder="例如：普通人怎么用AI做第一份副业">
+        </label>
+        <label class="field"><span class="cap">写作角度（可空）</span>
+          <input type="text" id="in-custom-angle" placeholder="例如：从一个真实接单案例讲起">
+        </label>
+        <label class="field"><span class="cap">文章类型</span>
+          <select id="in-custom-type">
+            <option>干货文</option><option>观点文</option><option>案例文</option><option>清单体</option>
+          </select>
+        </label>
+        <button class="btn secondary" id="btn-custom">用这个主题</button>
+      </div>
+    </div>
+    <div class="card" id="topics-card" style="display:none">
+      <h3>候选选题</h3>
+      <div class="sub">点击选中一个，然后进入下一步</div>
+      <div id="topics-list"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="btn-goto-article" disabled>下一步：写文章</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页2 文章 ============ -->
+  <section class="page" id="page-article">
+    <div class="hero">
+      <h1>生成文章</h1>
+      <p>抓取参考原文学语感 · 反AI腔约束 · 可手动编辑</p>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h3 id="art-topic-title">未选定选题</h3>
+          <div class="sub" id="art-topic-meta"></div>
+        </div>
+        <span class="chip" id="chip-ai" style="display:none"></span>
+      </div>
+      <label class="field"><span class="cap">写作补充要求（语气 / 行业 / 禁忌，可空）</span>
+        <input type="text" id="in-user-extra" placeholder="例如：面向零基础读者，多举国内工具例子">
+      </label>
+      <div class="row">
+        <button class="btn" id="btn-write">大模型写作</button>
+        <button class="btn secondary" id="btn-rewrite" style="display:none">换个写法重写</button>
+        <button class="btn ghost" id="btn-illustrate" style="display:none">智能配图（技术文出示意图 / 情感文出氛围图）</button>
+      </div>
+      <div style="height:12px"></div>
+      <div class="console" id="log-article"></div>
+    </div>
+    <div class="card" id="editor-card" style="display:none">
+      <div class="row" style="justify-content:space-between; margin-bottom:12px">
+        <h3>文章编辑（Markdown）</h3>
+        <div class="row">
+          <span class="muted" id="art-chars"></span>
+          <button class="btn secondary" id="btn-save-md">保存修改</button>
+          <button class="btn" data-page="cover">下一步：封面</button>
+        </div>
+      </div>
+      <textarea id="md-editor" rows="22" spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <!-- ============ 页3 封面 ============ -->
+  <section class="page" id="page-cover">
+    <div class="hero">
+      <h1>封面图</h1>
+      <p>AI 生图，或上传你自己的图片 · 公众号尺寸 900 × 383</p>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>生成封面</h3>
+        <div class="sub">使用设置里的生图模型（IMAGE_*）</div>
+        <label class="field"><span class="cap">画面风格</span>
+          <select id="in-cover-style">
+            <option value="editorial">editorial · 杂志编辑风</option>
+            <option value="tech">tech · 科技感</option>
+            <option value="warm">warm · 温暖生活</option>
+            <option value="business">business · 商务简约</option>
+            <option value="nature">nature · 自然氛围</option>
+          </select>
+        </label>
+        <div class="row">
+          <button class="btn" id="btn-cover-ai">AI 生成封面</button>
+          <button class="btn secondary" id="btn-cover-template">文字模板封面</button>
+          <label class="btn ghost" style="cursor:pointer">上传图片
+            <input type="file" id="in-cover-file" accept="image/jpeg,image/png" style="display:none">
+          </label>
+        </div>
+        <div style="height:12px"></div>
+        <div class="console" id="log-cover"></div>
+      </div>
+      <div class="card">
+        <h3>当前封面</h3>
+        <div class="sub">草稿箱要求必须有封面</div>
+        <div class="cover-box" id="cover-box">还没有封面</div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" data-page="publish" id="btn-goto-publish" disabled>下一步：预览发布</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页4 预览发布 ============ -->
+  <section class="page" id="page-publish">
+    <div class="hero">
+      <h1>预览与发布</h1>
+      <p>所见即所得 · 满意再进草稿箱，不会自动群发</p>
+    </div>
+    <div class="grid-2">
+      <div>
+        <div class="card">
+          <h3>排版主题</h3>
+          <div class="sub">切换后右侧手机实时刷新</div>
+          <div class="theme-seg" id="theme-seg"></div>
+          <div style="height:18px"></div>
+          <div class="row" style="gap:8px; flex-direction:column; align-items:stretch">
+            <div class="row" style="justify-content:space-between">
+              <span class="muted">标题</span><span id="pub-title" style="font-size:13px;font-weight:600"></span>
+            </div>
+            <div class="row" style="justify-content:space-between">
+              <span class="muted">摘要</span><span id="pub-digest" class="muted" style="max-width:70%;text-align:right"></span>
+            </div>
+            <div class="row" style="justify-content:space-between">
+              <span class="muted">封面</span><span class="chip" id="pub-cover-chip">未生成</span>
+            </div>
+          </div>
+        </div>
+        <div class="card" id="publish-card">
+          <h3>上传草稿箱</h3>
+          <div class="sub">正文站外图片会自动转微信图床</div>
+          <button class="btn lg" id="btn-publish">确认上传到草稿箱</button>
+          <div style="height:12px"></div>
+          <div class="console" id="log-publish"></div>
+        </div>
+        <div class="card success-panel" id="success-card" style="display:none">
+          <div class="icon">✓</div>
+          <h3>已进入草稿箱</h3>
+          <p class="muted" style="margin:8px 0 4px">media_id</p>
+          <p class="mono" id="success-mid" style="font-size:13px"></p>
+          <p class="muted" style="margin-top:14px">打开 mp.weixin.qq.com → 草稿箱，预览后手动发布</p>
+          <div style="height:16px"></div>
+          <button class="btn secondary" id="btn-new-run">再写一篇</button>
+        </div>
+      </div>
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="screen">
+            <div class="notch"></div>
+            <iframe id="preview-frame" title="手机预览"></iframe>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页5 设置 ============ -->
+  <section class="page" id="page-settings">
+    <div class="hero">
+      <h1>设置</h1>
+      <p>四组配置各自独立 · 保存后立即生效（写入 .env）</p>
+    </div>
+    <div class="card" id="settings-body">加载中…</div>
+    <div class="row" style="justify-content:center">
+      <button class="btn lg" id="btn-save-settings">保存全部设置</button>
+    </div>
+  </section>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ================= 基础工具 ================= */
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+function toast(msg, ms = 2600) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/* 轮询后台任务：日志写入 consoleEl，结束返回 result */
+async function watchTask(taskId, consoleEl, btn) {
+  consoleEl.classList.add("show");
+  consoleEl.innerHTML = "";
+  let shown = 0;
+  if (btn) { btn.disabled = true; btn._old = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>' + btn.textContent; }
+  try {
+    while (true) {
+      const t = await api(`/api/task/${taskId}`);
+      for (; shown < t.log.length; shown++) {
+        const div = document.createElement("div");
+        div.textContent = t.log[shown];
+        if (/成功|完成|干净/.test(t.log[shown])) div.className = "okline";
+        consoleEl.appendChild(div);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+      if (t.status === "done") return t.result;
+      if (t.status === "error") {
+        const div = document.createElement("div");
+        div.className = "err";
+        div.textContent = "✗ " + t.error;
+        consoleEl.appendChild(div);
+        throw new Error(t.error);
+      }
+      await new Promise(r => setTimeout(r, 700));
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = btn._old; }
+  }
+}
+
+/* ================= 页面切换 ================= */
+const PAGES = ["topic", "article", "cover", "publish", "settings"];
+function nav(page) {
+  PAGES.forEach(p => {
+    $(`#page-${p}`).classList.toggle("show", p === page);
+    const btn = $(`.nav-step[data-page=${p}]`) || $(`.env-pill[data-page=${p}]`);
+    if (btn) btn.classList.toggle("active", p === page);
+  });
+  if (page === "publish") renderPreview();
+  if (page === "settings") loadSettings();
+  if (page === "article") syncArticlePage();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+$$("[data-page]").forEach(el => el.addEventListener("click", () => nav(el.dataset.page)));
+
+/* ================= 全局状态 ================= */
+let S = { topics: [], topic: null, theme: "default", themes: {}, env: {} };
+
+async function refreshState() {
+  S = await api("/api/state");
+  // 顶栏配置状态点：四项全就绪才绿
+  const ok = S.env.wechat && S.env.llm && S.env.image_key;
+  $("#env-dot").classList.toggle("ok", !!ok);
+  // 步骤完成态
+  $(".nav-step[data-page=topic]").classList.toggle("done", !!S.topic);
+  $(".nav-step[data-page=article]").classList.toggle("done", !!S.has_article);
+  $(".nav-step[data-page=cover]").classList.toggle("done", !!S.has_cover);
+  $(".nav-step[data-page=publish]").classList.toggle("done", !!S.publish);
+  // 封面页
+  if (S.has_cover) {
+    $("#cover-box").innerHTML = `<img src="/runfile/cover.jpg?t=${Date.now()}">`;
+    $("#btn-goto-publish").disabled = false;
+    $("#pub-cover-chip").textContent = "已就绪";
+    $("#pub-cover-chip").className = "chip ok";
+  } else {
+    $("#pub-cover-chip").textContent = "未生成";
+    $("#pub-cover-chip").className = "chip warn";
+  }
+  // 发布成功卡
+  if (S.publish) {
+    $("#success-card").style.display = "";
+    $("#publish-card").style.display = "none";
+    $("#success-mid").textContent = S.publish.media_id;
+  } else {
+    $("#success-card").style.display = "none";
+    $("#publish-card").style.display = "";
+  }
+  return S;
+}
+
+/* ================= 页1 选题 ================= */
+$("#btn-search").addEventListener("click", async () => {
+  try {
+    const { task } = await api("/api/topics/search", { method: "POST", body: {
+      domain: $("#in-domain").value, extra: $("#in-extra").value, want_n: 5,
+    }});
+    const result = await watchTask(task, $("#log-topic"), $("#btn-search"));
+    renderTopics(result.topics);
+    toast("选题整理完成，请挑一个");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+function renderTopics(topics) {
+  S.topics = topics;
+  $("#topics-card").style.display = "";
+  const list = $("#topics-list");
+  list.innerHTML = "";
+  topics.forEach((t, i) => {
+    const div = document.createElement("div");
+    div.className = "topic-card";
+    div.innerHTML = `
+      <div class="t-title"><span>${t.title}</span>
+        ${t.score !== "" ? `<span class="score-badge">潜力 ${t.score}</span>` : ""}</div>
+      <div class="t-meta">${t.type} · ${t.audience || "大众读者"}<br>
+        角度：${t.angle || "—"}<br>理由：${t.why || "—"}</div>`;
+    div.addEventListener("click", async () => {
+      $$(".topic-card").forEach(c => c.classList.remove("selected"));
+      div.classList.add("selected");
+      await api("/api/topics/select", { method: "POST", body: t });
+      $("#btn-goto-article").disabled = false;
+      await refreshState();
+    });
+    list.appendChild(div);
+  });
+  $("#topics-card").scrollIntoView({ behavior: "smooth" });
+}
+
+$("#btn-custom").addEventListener("click", async () => {
+  const title = $("#in-custom-title").value.trim();
+  if (!title) return toast("请先填主题");
+  await api("/api/topics/select", { method: "POST", body: {
+    title, angle: $("#in-custom-angle").value, type: $("#in-custom-type").value,
+  }});
+  await refreshState();
+  toast("已选定主题");
+  nav("article");
+});
+$("#btn-goto-article").addEventListener("click", () => nav("article"));
+
+/* ================= 页2 文章 ================= */
+function syncArticlePage() {
+  if (S.topic) {
+    $("#art-topic-title").textContent = S.topic.title;
+    $("#art-topic-meta").textContent =
+      `${S.topic.type || ""} · ${S.topic.angle || "无预设角度"}`;
+  }
+  if (S.has_article) loadArticle();
+}
+
+async function loadArticle() {
+  const { md } = await api("/api/article");
+  if (!md) return;
+  $("#editor-card").style.display = "";
+  $("#md-editor").value = md;
+  $("#art-chars").textContent = `${md.length} 字`;
+  $("#btn-rewrite").style.display = "";
+  $("#btn-illustrate").style.display = "";
+  showAiChip(S.ai_hits || []);
+}
+
+function showAiChip(hits) {
+  const chip = $("#chip-ai");
+  chip.style.display = "";
+  if (hits.length) {
+    chip.className = "chip warn";
+    chip.textContent = `AI腔 ${hits.length} 处：${hits.slice(0, 4).join("、")}`;
+  } else {
+    chip.className = "chip ok";
+    chip.textContent = "AI腔检测通过";
+  }
+}
+
+async function writeArticle(extraHint) {
+  if (!S.topic) { toast("请先选定选题"); return nav("topic"); }
+  let extra = $("#in-user-extra").value.trim();
+  if (extraHint) extra = (extra ? extra + "；" : "") + extraHint;
+  try {
+    const { task } = await api("/api/article/write", { method: "POST", body: { mode: "llm", user_extra: extra }});
+    const r = await watchTask(task, $("#log-article"), $("#btn-write"));
+    await refreshState();
+    await loadArticle();
+    showAiChip(r.ai_hits || []);
+    toast("文章已生成，可直接编辑");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+}
+$("#btn-write").addEventListener("click", () => writeArticle());
+$("#btn-rewrite").addEventListener("click", () => writeArticle("请换个开头和案例重写，更口语"));
+
+$("#btn-save-md").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/article", { method: "POST", body: { md: $("#md-editor").value }});
+    $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
+    showAiChip(r.ai_hits || []);
+    await refreshState();
+    toast("已保存");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+$("#btn-illustrate").addEventListener("click", async () => {
+  try {
+    const { task } = await api("/api/article/illustrate", { method: "POST", body: {} });
+    await watchTask(task, $("#log-article"), $("#btn-illustrate"));
+    await loadArticle();
+    toast("配图完成，已插入文章");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+/* ================= 页3 封面 ================= */
+$("#btn-cover-ai").addEventListener("click", async () => {
+  try {
+    const { task } = await api("/api/cover/generate", { method: "POST", body: {
+      style: $("#in-cover-style").value,
+    }});
+    await watchTask(task, $("#log-cover"), $("#btn-cover-ai"));
+    await refreshState();
+    toast("封面已生成");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+$("#btn-cover-template").addEventListener("click", async () => {
+  try {
+    const { task } = await api("/api/cover/generate", { method: "POST", body: { template: true }});
+    await watchTask(task, $("#log-cover"), $("#btn-cover-template"));
+    await refreshState();
+    toast("模板封面已生成");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+$("#in-cover-file").addEventListener("change", async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/api/cover/upload", { method: "POST", body: fd });
+  if (res.ok) { await refreshState(); toast("封面已上传"); }
+  else toast("上传失败", 3000);
+  ev.target.value = "";
+});
+
+/* ================= 页4 预览发布 ================= */
+function renderThemeSeg() {
+  const seg = $("#theme-seg");
+  seg.innerHTML = "";
+  Object.entries(S.themes).forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label.split("·")[0].trim();
+    b.title = label;
+    b.classList.toggle("on", key === S.theme);
+    b.addEventListener("click", () => { S.theme = key; renderThemeSeg(); renderPreview(); });
+    seg.appendChild(b);
+  });
+}
+
+async function renderPreview() {
+  if (!S.has_article) { $("#preview-frame").srcdoc = "<p style='padding:40px;color:#999;font-family:sans-serif'>还没有文章</p>"; return; }
+  try {
+    const r = await api("/api/render", { method: "POST", body: { theme: S.theme }});
+    $("#preview-frame").srcdoc = r.preview;
+    $("#pub-title").textContent = r.title;
+    $("#pub-digest").textContent = r.digest;
+  } catch (e) { toast(e.message, 3000); }
+}
+
+$("#btn-publish").addEventListener("click", async () => {
+  if (!confirm("确认上传到公众号草稿箱？\n（只进草稿箱，不会自动群发）")) return;
+  try {
+    const { task } = await api("/api/publish", { method: "POST", body: { theme: S.theme }});
+    await watchTask(task, $("#log-publish"), $("#btn-publish"));
+    await refreshState();
+    toast("已进入草稿箱 ✓", 4000);
+  } catch (e) { toast("失败：" + e.message, 5000); }
+});
+
+$("#btn-new-run").addEventListener("click", async () => {
+  await api("/api/new_run", { method: "POST" });
+  await refreshState();
+  $("#topics-card").style.display = "none";
+  $("#editor-card").style.display = "none";
+  $("#md-editor").value = "";
+  $("#log-topic").classList.remove("show");
+  $("#log-article").classList.remove("show");
+  $("#log-cover").classList.remove("show");
+  $("#log-publish").classList.remove("show");
+  $("#cover-box").innerHTML = "还没有封面";
+  toast("新一篇开始");
+  nav("topic");
+});
+
+/* ================= 页5 设置 ================= */
+let SETTINGS_SCHEMA = null;
+async function loadSettings() {
+  const { schema, values } = await api("/api/settings");
+  SETTINGS_SCHEMA = schema;
+  const box = $("#settings-body");
+  box.innerHTML = "";
+  schema.forEach(group => {
+    const g = document.createElement("div");
+    g.className = "set-group";
+    g.innerHTML = `<h4>${group.group}</h4><div class="gdesc">${group.desc}</div>`;
+    const grid = document.createElement("div");
+    grid.className = "set-grid";
+    group.fields.forEach(f => {
+      const val = values[f.key] ?? "";
+      if (f.type === "toggle") {
+        const row = document.createElement("div");
+        row.className = "toggle-row";
+        row.innerHTML = `<span class="cap">${f.label}</span>
+          <label class="switch"><input type="checkbox" data-key="${f.key}" ${val === "1" ? "checked" : ""}>
+          <span class="track"></span></label>`;
+        grid.appendChild(row);
+      } else if (f.type === "select") {
+        const lab = document.createElement("label");
+        lab.className = "field";
+        lab.innerHTML = `<span class="cap">${f.label}</span>
+          <select data-key="${f.key}">${f.options.map(o =>
+            `<option value="${o}" ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+        grid.appendChild(lab);
+      } else {
+        const lab = document.createElement("label");
+        lab.className = "field";
+        lab.innerHTML = `<span class="cap">${f.label}</span>
+          <input type="${f.secret ? "password" : "text"}" data-key="${f.key}" value="${String(val).replace(/"/g, "&quot;")}"
+                 placeholder="${f.secret ? "••••••" : ""}" autocomplete="off">`;
+        grid.appendChild(lab);
+      }
+    });
+    g.appendChild(grid);
+    box.appendChild(g);
+  });
+}
+
+$("#btn-save-settings").addEventListener("click", async () => {
+  const values = {};
+  $$("#settings-body [data-key]").forEach(el => {
+    values[el.dataset.key] = el.type === "checkbox" ? (el.checked ? "1" : "0") : el.value;
+  });
+  try {
+    await api("/api/settings", { method: "POST", body: { values }});
+    await refreshState();
+    toast("设置已保存并生效");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+/* ================= 启动 ================= */
+(async function init() {
+  await refreshState();
+  renderThemeSeg();
+  if (S.env.author === undefined) {} // 保留占位
+  // 默认领域词回填
+  $("#in-domain").value = "";
+  nav(S.publish ? "publish" : (S.has_article ? "article" : "topic"));
+  if (S.topics && S.topics.length) renderTopics(S.topics);
+})();
+</script>
+</body>
+</html>

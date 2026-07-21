@@ -1,0 +1,7 @@
+# 依赖版本已锁定（对应本机 venv 实测通过的组合），升级前请先跑 scripts/selftest.py
+requests==2.34.2
+python-dotenv==1.2.2
+Pillow==12.3.0
+Flask==3.1.3
+# 免费搜索兜底（原 duckduckgo-search 已停止维护，改用后继包 ddgs）
+ddgs==9.14.4
