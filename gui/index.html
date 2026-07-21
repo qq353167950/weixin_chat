@@ -249,6 +249,48 @@
   }
   .muted { color: var(--text-2); font-size: 13px; }
   .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
+  /* ============ 弹层（确认框 / 排版预览） ============ */
+  .mask {
+    position: fixed; inset: 0; z-index: 300; display: none;
+    background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .mask.show { display: flex; animation: fadein .2s ease; }
+  .modal {
+    background: var(--card-solid); border-radius: var(--radius-l);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25); padding: 28px;
+    max-width: 420px; width: 100%; text-align: center;
+  }
+  .modal h3 { font-size: 17px; margin-bottom: 8px; }
+  .modal p { color: var(--text-2); font-size: 14px; line-height: 1.6; white-space: pre-line; }
+  .modal .row { justify-content: center; margin-top: 22px; }
+  .modal-phone { max-width: 430px; width: 100%; }
+  .modal-phone .close-bar { text-align: center; margin-top: 14px; }
+
+  /* 未保存标记 */
+  .dirty-dot { color: var(--orange); font-weight: 600; }
+
+  /* 历史列表 */
+  .run-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 4px; border-bottom: 0.5px solid var(--hairline);
+  }
+  .run-row:last-child { border-bottom: none; }
+  .run-row .thumb {
+    width: 90px; height: 38px; border-radius: 8px; object-fit: cover;
+    background: rgba(0,0,0,0.05); flex: none;
+  }
+  .run-row .info { flex: 1; min-width: 0; }
+  .run-row .info .t { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-row .info .m { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+  /* 任务取消行 */
+  .cancel-line { margin-top: 6px; }
+  .cancel-line button {
+    border: none; background: transparent; color: #ff6961; cursor: pointer;
+    font-family: inherit; font-size: 12px; padding: 0; text-decoration: underline;
+  }
 </style>
 </head>
 <body>
@@ -262,6 +304,7 @@
       <button class="nav-step" data-page="cover"><span class="num">3</span>封面</button>
       <button class="nav-step" data-page="publish"><span class="num">4</span>预览发布</button>
     </div>
+    <button class="env-pill" data-page="history" id="history-pill">历史</button>
     <button class="env-pill" data-page="settings" id="env-pill">
       <span class="env-dot" id="env-dot"></span>设置
     </button>
@@ -285,6 +328,14 @@
         </label>
         <label class="field"><span class="cap">额外搜索词（可空）</span>
           <input type="text" id="in-extra" placeholder="例如：AI副业 裁员">
+        </label>
+        <label class="field"><span class="cap">候选选题数量</span>
+          <select id="in-want-n">
+            <option value="3">3 个</option>
+            <option value="5" selected>5 个</option>
+            <option value="8">8 个</option>
+            <option value="10">10 个</option>
+          </select>
         </label>
         <div class="row">
           <button class="btn" id="btn-search">开始搜索选题</button>
@@ -347,11 +398,12 @@
     </div>
     <div class="card" id="editor-card" style="display:none">
       <div class="row" style="justify-content:space-between; margin-bottom:12px">
-        <h3>文章编辑（Markdown）</h3>
+        <h3>文章编辑（Markdown）<span class="dirty-dot" id="dirty-dot" style="display:none">·未保存</span></h3>
         <div class="row">
           <span class="muted" id="art-chars"></span>
+          <button class="btn ghost" id="btn-preview-md">预览排版</button>
           <button class="btn secondary" id="btn-save-md">保存修改</button>
-          <button class="btn" data-page="cover">下一步：封面</button>
+          <button class="btn" id="btn-goto-cover">下一步：封面</button>
         </div>
       </div>
       <textarea id="md-editor" rows="22" spellcheck="false"></textarea>
@@ -381,7 +433,7 @@
           <button class="btn" id="btn-cover-ai">AI 生成封面</button>
           <button class="btn secondary" id="btn-cover-template">文字模板封面</button>
           <label class="btn ghost" style="cursor:pointer">上传图片
-            <input type="file" id="in-cover-file" accept="image/jpeg,image/png" style="display:none">
+            <input type="file" id="in-cover-file" accept="image/*" style="display:none">
           </label>
         </div>
         <div style="height:12px"></div>
@@ -411,16 +463,17 @@
           <div class="sub">切换后右侧手机实时刷新</div>
           <div class="theme-seg" id="theme-seg"></div>
           <div style="height:18px"></div>
-          <div class="row" style="gap:8px; flex-direction:column; align-items:stretch">
-            <div class="row" style="justify-content:space-between">
-              <span class="muted">标题</span><span id="pub-title" style="font-size:13px;font-weight:600"></span>
-            </div>
-            <div class="row" style="justify-content:space-between">
-              <span class="muted">摘要</span><span id="pub-digest" class="muted" style="max-width:70%;text-align:right"></span>
-            </div>
-            <div class="row" style="justify-content:space-between">
-              <span class="muted">封面</span><span class="chip" id="pub-cover-chip">未生成</span>
-            </div>
+          <label class="field"><span class="cap">标题（≤64 字，可改）</span>
+            <input type="text" id="pub-title" maxlength="64">
+          </label>
+          <label class="field"><span class="cap">摘要（≤120 字，影响打开率，可改）</span>
+            <textarea id="pub-digest" rows="3" maxlength="120"></textarea>
+          </label>
+          <label class="field"><span class="cap">作者名（≤8 字，可改）</span>
+            <input type="text" id="pub-author" maxlength="8">
+          </label>
+          <div class="row" style="justify-content:space-between">
+            <span class="muted">封面</span><span class="chip" id="pub-cover-chip">未生成</span>
           </div>
         </div>
         <div class="card" id="publish-card">
@@ -435,6 +488,8 @@
           <h3>已进入草稿箱</h3>
           <p class="muted" style="margin:8px 0 4px">media_id</p>
           <p class="mono" id="success-mid" style="font-size:13px"></p>
+          <div style="height:10px"></div>
+          <button class="btn ghost" id="btn-copy-mid">复制 media_id</button>
           <p class="muted" style="margin-top:14px">打开 mp.weixin.qq.com → 草稿箱，预览后手动发布</p>
           <div style="height:16px"></div>
           <button class="btn secondary" id="btn-new-run">再写一篇</button>
@@ -463,6 +518,42 @@
     </div>
   </section>
 
+  <!-- ============ 页6 历史 ============ -->
+  <section class="page" id="page-history">
+    <div class="hero">
+      <h1>历史产出</h1>
+      <p>之前写过的文章都在这里 · 可重新打开继续编辑或发布</p>
+    </div>
+    <div class="card" id="history-body">加载中…</div>
+  </section>
+
+</div>
+
+<!-- 确认弹窗 -->
+<div class="mask" id="confirm-mask">
+  <div class="modal">
+    <h3 id="confirm-title"></h3>
+    <p id="confirm-text"></p>
+    <div class="row">
+      <button class="btn secondary" id="confirm-no">取消</button>
+      <button class="btn" id="confirm-yes">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 文章页排版预览弹层 -->
+<div class="mask" id="preview-mask">
+  <div class="modal-phone">
+    <div class="phone" style="margin:0 auto">
+      <div class="screen">
+        <div class="notch"></div>
+        <iframe id="md-preview-frame" title="排版预览"></iframe>
+      </div>
+    </div>
+    <div class="close-bar">
+      <button class="btn secondary" id="btn-close-preview">关闭预览</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast"></div>
@@ -491,11 +582,42 @@ async function api(path, opts = {}) {
   return data;
 }
 
-/* 轮询后台任务：日志写入 consoleEl，结束返回 result */
-async function watchTask(taskId, consoleEl, btn) {
+/* 苹果风确认弹窗（替代原生 confirm） */
+function askConfirm(title, text) {
+  return new Promise(resolve => {
+    $("#confirm-title").textContent = title;
+    $("#confirm-text").textContent = text;
+    const mask = $("#confirm-mask");
+    mask.classList.add("show");
+    const done = (ok) => {
+      mask.classList.remove("show");
+      $("#confirm-yes").onclick = $("#confirm-no").onclick = mask.onclick = null;
+      resolve(ok);
+    };
+    $("#confirm-yes").onclick = () => done(true);
+    $("#confirm-no").onclick = () => done(false);
+    mask.onclick = (e) => { if (e.target === mask) done(false); };
+  });
+}
+
+/* 轮询后台任务：日志写入 consoleEl，结束返回 result。cancellable 时日志区显示取消按钮 */
+async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
   consoleEl.classList.add("show");
   consoleEl.innerHTML = "";
   let shown = 0;
+  let cancelLine = null;
+  if (cancellable) {
+    cancelLine = document.createElement("div");
+    cancelLine.className = "cancel-line";
+    const cbtn = document.createElement("button");
+    cbtn.textContent = "取消任务";
+    cbtn.onclick = async () => {
+      cbtn.disabled = true;
+      cbtn.textContent = "正在取消…";
+      try { await api(`/api/task/${taskId}/cancel`, { method: "POST" }); } catch (_) {}
+    };
+    cancelLine.appendChild(cbtn);
+  }
   if (btn) { btn.disabled = true; btn._old = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>' + btn.textContent; }
   try {
     while (true) {
@@ -505,9 +627,20 @@ async function watchTask(taskId, consoleEl, btn) {
         div.textContent = t.log[shown];
         if (/成功|完成|干净/.test(t.log[shown])) div.className = "okline";
         consoleEl.appendChild(div);
-        consoleEl.scrollTop = consoleEl.scrollHeight;
       }
+      if (cancelLine && t.status === "running") {
+        consoleEl.appendChild(cancelLine);  // 始终保持在末尾
+      } else if (cancelLine) {
+        cancelLine.remove();
+      }
+      consoleEl.scrollTop = consoleEl.scrollHeight;
       if (t.status === "done") return t.result;
+      if (t.status === "cancelled") {
+        const div = document.createElement("div");
+        div.textContent = "— 任务已取消 —";
+        consoleEl.appendChild(div);
+        throw new Error("已取消");
+      }
       if (t.status === "error") {
         const div = document.createElement("div");
         div.className = "err";
@@ -518,13 +651,16 @@ async function watchTask(taskId, consoleEl, btn) {
       await new Promise(r => setTimeout(r, 700));
     }
   } finally {
+    if (cancelLine) cancelLine.remove();
     if (btn) { btn.disabled = false; btn.innerHTML = btn._old; }
   }
 }
 
 /* ================= 页面切换 ================= */
-const PAGES = ["topic", "article", "cover", "publish", "settings"];
+const PAGES = ["topic", "article", "cover", "publish", "settings", "history"];
 function nav(page) {
+  // 离开文章页时若有未保存内容，自动保存（静默，失败不阻断）
+  if (MD_DIRTY && page !== "article") saveArticle({ silent: true });
   PAGES.forEach(p => {
     $(`#page-${p}`).classList.toggle("show", p === page);
     const btn = $(`.nav-step[data-page=${p}]`) || $(`.env-pill[data-page=${p}]`);
@@ -533,12 +669,24 @@ function nav(page) {
   if (page === "publish") renderPreview();
   if (page === "settings") loadSettings();
   if (page === "article") syncArticlePage();
+  if (page === "history") loadHistory();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 $$("[data-page]").forEach(el => el.addEventListener("click", () => nav(el.dataset.page)));
 
 /* ================= 全局状态 ================= */
 let S = { topics: [], topic: null, theme: "default", themes: {}, env: {} };
+let MD_DIRTY = false;      // 编辑器有未保存修改
+
+function setDirty(v) {
+  MD_DIRTY = v;
+  $("#dirty-dot").style.display = v ? "" : "none";
+}
+
+/* 有未保存修改时关闭页面提醒 */
+window.addEventListener("beforeunload", (e) => {
+  if (MD_DIRTY) { e.preventDefault(); e.returnValue = ""; }
+});
 
 async function refreshState() {
   S = await api("/api/state");
@@ -576,7 +724,8 @@ async function refreshState() {
 $("#btn-search").addEventListener("click", async () => {
   try {
     const { task } = await api("/api/topics/search", { method: "POST", body: {
-      domain: $("#in-domain").value, extra: $("#in-extra").value, want_n: 5,
+      domain: $("#in-domain").value, extra: $("#in-extra").value,
+      want_n: parseInt($("#in-want-n").value, 10) || 5,
     }});
     const result = await watchTask(task, $("#log-topic"), $("#btn-search"));
     renderTopics(result.topics);
@@ -639,6 +788,7 @@ async function loadArticle() {
   $("#art-chars").textContent = `${md.length} 字`;
   $("#btn-rewrite").style.display = "";
   $("#btn-illustrate").style.display = "";
+  setDirty(false);
   showAiChip(S.ai_hits || []);
 }
 
@@ -670,17 +820,69 @@ async function writeArticle(extraHint) {
 $("#btn-write").addEventListener("click", () => writeArticle());
 $("#btn-rewrite").addEventListener("click", () => writeArticle("请换个开头和案例重写，更口语"));
 
-$("#btn-save-md").addEventListener("click", async () => {
+/* 保存文章：silent 时不弹提示（用于切页/发布前自动保存） */
+async function saveArticle({ silent = false } = {}) {
+  const md = $("#md-editor").value;
+  if (!md.trim()) return false;
   try {
-    const r = await api("/api/article", { method: "POST", body: { md: $("#md-editor").value }});
-    $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
+    const r = await api("/api/article", { method: "POST", body: { md }});
+    $("#art-chars").textContent = `${md.length} 字`;
     showAiChip(r.ai_hits || []);
+    setDirty(false);
     await refreshState();
-    toast("已保存");
-  } catch (e) { toast("失败：" + e.message, 4000); }
+    if (!silent) toast("已保存");
+    return true;
+  } catch (e) {
+    toast("保存失败：" + e.message, 4000);
+    return false;
+  }
+}
+$("#btn-save-md").addEventListener("click", () => saveArticle());
+
+/* 编辑即标记未保存 */
+$("#md-editor").addEventListener("input", () => {
+  setDirty(true);
+  $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
+});
+
+/* Ctrl+S / Cmd+S 保存文章（拦截浏览器保存网页） */
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    if ($("#page-article").classList.contains("show") && $("#editor-card").style.display !== "none") {
+      e.preventDefault();
+      saveArticle();
+    }
+  }
+});
+
+/* 下一步：封面（先保存再走） */
+$("#btn-goto-cover").addEventListener("click", async () => {
+  if (MD_DIRTY) await saveArticle({ silent: true });
+  nav("cover");
+});
+
+/* 文章页排版预览弹层 */
+$("#btn-preview-md").addEventListener("click", async () => {
+  if (MD_DIRTY) {
+    const ok = await saveArticle({ silent: true });
+    if (!ok) return;
+  }
+  try {
+    const r = await api("/api/render", { method: "POST", body: { theme: S.theme }});
+    $("#md-preview-frame").srcdoc = r.preview;
+    $("#preview-mask").classList.add("show");
+  } catch (e) { toast("预览失败：" + e.message, 3000); }
+});
+$("#btn-close-preview").addEventListener("click", () => $("#preview-mask").classList.remove("show"));
+$("#preview-mask").addEventListener("click", (e) => {
+  if (e.target === $("#preview-mask")) $("#preview-mask").classList.remove("show");
 });
 
 $("#btn-illustrate").addEventListener("click", async () => {
+  if (MD_DIRTY) {
+    const ok = await saveArticle({ silent: true });
+    if (!ok) return;
+  }
   try {
     const { task } = await api("/api/article/illustrate", { method: "POST", body: {} });
     await watchTask(task, $("#log-article"), $("#btn-illustrate"));
@@ -715,9 +917,14 @@ $("#in-cover-file").addEventListener("change", async (ev) => {
   if (!file) return;
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/api/cover/upload", { method: "POST", body: fd });
-  if (res.ok) { await refreshState(); toast("封面已上传"); }
-  else toast("上传失败", 3000);
+  try {
+    const res = await fetch("/api/cover/upload", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { await refreshState(); toast("封面已上传"); }
+    else toast("上传失败：" + (data.error || `HTTP ${res.status}`), 4000);
+  } catch (e) {
+    toast("上传失败：" + e.message, 4000);
+  }
   ev.target.value = "";
 });
 
@@ -735,40 +942,131 @@ function renderThemeSeg() {
   });
 }
 
+/* 标题/摘要/作者：用户改过就不再被自动生成值覆盖（换主题重渲染时保护手动修改） */
+["pub-title", "pub-digest", "pub-author"].forEach(id => {
+  $(`#${id}`).addEventListener("input", (e) => { e.target.dataset.edited = "1"; });
+});
+
 async function renderPreview() {
   if (!S.has_article) { $("#preview-frame").srcdoc = "<p style='padding:40px;color:#999;font-family:sans-serif'>还没有文章</p>"; return; }
   try {
     const r = await api("/api/render", { method: "POST", body: { theme: S.theme }});
     $("#preview-frame").srcdoc = r.preview;
-    $("#pub-title").textContent = r.title;
-    $("#pub-digest").textContent = r.digest;
+    const fill = (id, val) => {
+      const el = $(`#${id}`);
+      if (el.dataset.edited !== "1") el.value = val;
+    };
+    fill("pub-title", r.title);
+    fill("pub-digest", r.digest);
+    fill("pub-author", r.author || "");
   } catch (e) { toast(e.message, 3000); }
 }
 
 $("#btn-publish").addEventListener("click", async () => {
-  if (!confirm("确认上传到公众号草稿箱？\n（只进草稿箱，不会自动群发）")) return;
+  const ok = await askConfirm("上传到草稿箱？", "只进草稿箱，不会自动群发。\n你可以在公众号后台预览后再手动发布。");
+  if (!ok) return;
   try {
-    const { task } = await api("/api/publish", { method: "POST", body: { theme: S.theme }});
-    await watchTask(task, $("#log-publish"), $("#btn-publish"));
+    const { task } = await api("/api/publish", { method: "POST", body: {
+      theme: S.theme,
+      title: $("#pub-title").value.trim(),
+      digest: $("#pub-digest").value.trim(),
+      author: $("#pub-author").value.trim(),
+    }});
+    // 上传不提供取消：中途截断可能产生半成品素材
+    await watchTask(task, $("#log-publish"), $("#btn-publish"), { cancellable: false });
     await refreshState();
     toast("已进入草稿箱 ✓", 4000);
   } catch (e) { toast("失败：" + e.message, 5000); }
 });
 
-$("#btn-new-run").addEventListener("click", async () => {
-  await api("/api/new_run", { method: "POST" });
-  await refreshState();
+$("#btn-copy-mid").addEventListener("click", async () => {
+  const mid = $("#success-mid").textContent;
+  try {
+    await navigator.clipboard.writeText(mid);
+    toast("已复制 media_id");
+  } catch (_) {
+    // 剪贴板 API 不可用时兜底（如非安全上下文）
+    const ta = document.createElement("textarea");
+    ta.value = mid;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    toast("已复制 media_id");
+  }
+});
+
+function resetUiForRun() {
   $("#topics-card").style.display = "none";
   $("#editor-card").style.display = "none";
   $("#md-editor").value = "";
-  $("#log-topic").classList.remove("show");
-  $("#log-article").classList.remove("show");
-  $("#log-cover").classList.remove("show");
-  $("#log-publish").classList.remove("show");
+  setDirty(false);
+  ["log-topic", "log-article", "log-cover", "log-publish"].forEach(id =>
+    $(`#${id}`).classList.remove("show"));
   $("#cover-box").innerHTML = "还没有封面";
+  // 清掉发布页的手动修改标记，让新文章的标题/摘要能重新回填
+  ["pub-title", "pub-digest", "pub-author"].forEach(id => {
+    const el = $(`#${id}`);
+    el.value = "";
+    delete el.dataset.edited;
+  });
+}
+
+$("#btn-new-run").addEventListener("click", async () => {
+  await api("/api/new_run", { method: "POST" });
+  await refreshState();
+  resetUiForRun();
   toast("新一篇开始");
   nav("topic");
 });
+
+/* ================= 页6 历史 ================= */
+async function loadHistory() {
+  const box = $("#history-body");
+  box.innerHTML = "加载中…";
+  try {
+    const { runs } = await api("/api/runs");
+    if (!runs.length) { box.innerHTML = '<p class="muted">还没有历史产出</p>'; return; }
+    box.innerHTML = "";
+    runs.forEach(r => {
+      const row = document.createElement("div");
+      row.className = "run-row";
+      const stamp = r.run.replace(
+        /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}$/, "$1-$2-$3 $4:$5");
+      row.innerHTML = `
+        ${r.has_cover
+          ? `<img class="thumb" src="/api/runs/cover/${r.run}?t=${Date.now()}" alt="">`
+          : `<div class="thumb"></div>`}
+        <div class="info">
+          <div class="t">${r.title || "（未写文章）"}</div>
+          <div class="m">${stamp}${r.media_id ? " · 已进草稿箱" : ""}${r.current ? " · 当前" : ""}</div>
+        </div>`;
+      const btn = document.createElement("button");
+      btn.className = "btn secondary";
+      btn.textContent = r.current ? "编辑中" : "打开";
+      btn.disabled = !!r.current;
+      btn.addEventListener("click", async () => {
+        if (MD_DIRTY) {
+          const ok = await askConfirm("当前文章有未保存修改", "打开历史记录会丢弃这些修改，继续吗？");
+          if (!ok) return;
+          setDirty(false);
+        }
+        try {
+          await api("/api/runs/open", { method: "POST", body: { run: r.run }});
+          await refreshState();
+          resetUiForRun();
+          if (S.topics && S.topics.length) renderTopics(S.topics);
+          toast("已打开：" + (r.title || r.run));
+          nav(S.has_article ? "article" : "topic");
+        } catch (e) { toast("打开失败：" + e.message, 4000); }
+      });
+      row.appendChild(btn);
+      box.appendChild(row);
+    });
+  } catch (e) {
+    box.innerHTML = `<p class="muted">加载失败：${e.message}</p>`;
+  }
+}
 
 /* ================= 页5 设置 ================= */
 let SETTINGS_SCHEMA = null;
@@ -826,14 +1124,38 @@ $("#btn-save-settings").addEventListener("click", async () => {
 });
 
 /* ================= 启动 ================= */
+/* 刷新页面后恢复运行中任务的进度轮询（任务名 → 对应日志面板与完成动作） */
+const TASK_RESUME = {
+  "搜索选题":  { log: "log-topic",   page: "topic",
+                 done: async (r) => { if (r && r.topics) renderTopics(r.topics); } },
+  "生成文章":  { log: "log-article", page: "article",
+                 done: async () => { await loadArticle(); } },
+  "生成配图":  { log: "log-article", page: "article",
+                 done: async () => { await loadArticle(); } },
+  "生成封面":  { log: "log-cover",   page: "cover",  done: async () => {} },
+  "上传草稿箱": { log: "log-publish", page: "publish", done: async () => {} },
+};
+
+async function resumeRunningTasks() {
+  for (const t of S.tasks || []) {
+    const conf = TASK_RESUME[t.name];
+    if (!conf) continue;
+    nav(conf.page);
+    toast(`「${t.name}」仍在后台运行，已恢复进度`);
+    watchTask(t.id, $(`#${conf.log}`), null)
+      .then(async (r) => { await refreshState(); await conf.done(r); toast(`「${t.name}」完成`); })
+      .catch((e) => toast(`「${t.name}」${e.message === "已取消" ? "已取消" : "失败：" + e.message}`, 4000));
+    return;  // 同时最多恢复一个（正常流程也只会有一个在跑）
+  }
+}
+
 (async function init() {
   await refreshState();
   renderThemeSeg();
-  if (S.env.author === undefined) {} // 保留占位
-  // 默认领域词回填
   $("#in-domain").value = "";
   nav(S.publish ? "publish" : (S.has_article ? "article" : "topic"));
   if (S.topics && S.topics.length) renderTopics(S.topics);
+  await resumeRunningTasks();
 })();
 </script>
 </body>

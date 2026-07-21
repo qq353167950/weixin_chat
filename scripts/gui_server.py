@@ -83,11 +83,21 @@ def _evict_finished_tasks() -> None:
         TASKS.pop(tid, None)
 
 
+class TaskCancelled(BaseException):
+    """任务被用户取消。
+
+    继承 BaseException 而非 Exception：业务模块里的宽泛 except Exception
+    不会把取消信号吞掉，能一路抛到 worker 顶层。取消是协作式的，
+    在任务下一次调用 log() 时生效。
+    """
+
+
 def _new_task(name: str) -> dict:
     task = {
         "id": uuid.uuid4().hex[:12],
         "name": name,
-        "status": "running",   # running / done / error
+        "status": "running",   # running / done / error / cancelled
+        "cancel": False,       # 置 True 后任务在下一个日志点退出
         "log": [],
         "result": None,
         "error": "",
@@ -99,11 +109,13 @@ def _new_task(name: str) -> dict:
 
 
 def _run_task(name: str, fn) -> dict:
-    """后台线程执行 fn(task_log)；异常写入 task.error。"""
+    """后台线程执行 fn(task_log)；异常写入 task.error，取消置为 cancelled。"""
     task = _new_task(name)
 
     def log(msg: str) -> None:
         with _LOCK:
+            if task["cancel"]:
+                raise TaskCancelled("已取消")
             task["log"].append(str(msg))
 
     def worker() -> None:
@@ -112,10 +124,18 @@ def _run_task(name: str, fn) -> dict:
             with _LOCK:
                 task["result"] = result
                 task["status"] = "done"
+        except TaskCancelled:
+            with _LOCK:
+                task["status"] = "cancelled"
+                task["error"] = "已取消"
         except Exception as e:  # 面向 UI：所有异常转文字
             with _LOCK:
-                task["error"] = str(e)
-                task["status"] = "error"
+                if task["cancel"]:
+                    task["status"] = "cancelled"
+                    task["error"] = "已取消"
+                else:
+                    task["error"] = str(e)
+                    task["status"] = "error"
 
     threading.Thread(target=worker, daemon=True).start()
     return task
@@ -192,6 +212,18 @@ def index():
     return send_from_directory(ROOT / "gui", "index.html")
 
 
+@app.get("/favicon.ico")
+def favicon():
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+        '<rect width="64" height="64" rx="14" fill="#0071e3"/>'
+        '<text x="32" y="43" font-size="30" text-anchor="middle" fill="#fff" '
+        'font-family="-apple-system,PingFang SC,sans-serif" font-weight="700">稿</text>'
+        "</svg>"
+    )
+    return app.response_class(svg, mimetype="image/svg+xml")
+
+
 @app.get("/runfile/<path:relpath>")
 def runfile(relpath: str):
     with _LOCK:
@@ -210,6 +242,11 @@ def api_state():
         topic = STATE["topic"]
         theme = STATE["theme"]
         publish = STATE["publish"]
+        running = [
+            {"id": t["id"], "name": t["name"]}
+            for t in TASKS.values()
+            if t["status"] == "running"
+        ]
     md = _article_path()
     md_text = md.read_text(encoding="utf-8") if md else ""
     title = extract_title_and_body(md_text)[0] if md_text else ""
@@ -227,6 +264,7 @@ def api_state():
             "theme": theme,
             "themes": {k: v["label"] for k, v in THEMES.items()},
             "publish": publish,
+            "tasks": running,
             "env": _env_summary(),
         }
     )
@@ -239,6 +277,95 @@ def api_new_run():
             {"work_dir": None, "topics": [], "topic": None, "cover": False, "publish": None}
         )
     _ensure_run()
+    return api_state()
+
+
+# ---------------- 历史产出 ----------------
+def _run_brief(d: Path) -> dict:
+    """汇总单个 runs/<stamp> 目录的产出概况。"""
+    md = d / "article.md"
+    title = ""
+    if md.exists():
+        try:
+            title = extract_title_and_body(md.read_text(encoding="utf-8"))[0]
+        except Exception:
+            title = ""
+    media_id = ""
+    result = d / "result.txt"
+    if result.exists():
+        try:
+            m = re.search(r"media_id=(\S+)", result.read_text(encoding="utf-8"))
+            media_id = m.group(1) if m else ""
+        except Exception:
+            media_id = ""
+    return {
+        "run": d.name,
+        "title": title,
+        "has_article": md.exists(),
+        "has_cover": (d / "cover.jpg").exists(),
+        "media_id": media_id,
+    }
+
+
+@app.get("/api/runs")
+def api_runs():
+    runs_dir = ROOT / "runs"
+    if not runs_dir.exists():
+        return jsonify({"runs": []})
+    with _LOCK:
+        current = Path(STATE["work_dir"]).name if STATE["work_dir"] else None
+    dirs = sorted(
+        (d for d in runs_dir.iterdir() if d.is_dir()),
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    out = []
+    for d in dirs:
+        brief = _run_brief(d)
+        brief["current"] = d.name == current
+        out.append(brief)
+    return jsonify({"runs": out})
+
+
+@app.get("/api/runs/cover/<name>")
+def api_runs_cover(name: str):
+    """历史列表的封面缩略图（仅限时间戳目录名，防路径穿越）。"""
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+        return jsonify({"error": "无效的记录名"}), 400
+    d = ROOT / "runs" / name
+    if not (d / "cover.jpg").exists():
+        return jsonify({"error": "无封面"}), 404
+    return send_from_directory(d, "cover.jpg")
+
+
+@app.post("/api/runs/open")
+def api_runs_open():
+    """重新打开历史产出：恢复文章/封面/选题到当前会话，可继续编辑或重新发布。"""
+    name = str((request.get_json(force=True) or {}).get("run") or "").strip()
+    # 目录名只允许时间戳格式，防止路径穿越
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+        return jsonify({"error": "无效的记录名"}), 400
+    wd = ROOT / "runs" / name
+    if not wd.is_dir():
+        return jsonify({"error": "记录不存在"}), 404
+    topic = None
+    topic_file = wd / "topic.json"
+    if topic_file.exists():
+        try:
+            topic = json.loads(topic_file.read_text(encoding="utf-8"))
+        except Exception:
+            topic = None
+    topics = []
+    topics_file = wd / "topics.json"
+    if topics_file.exists():
+        try:
+            topics = json.loads(topics_file.read_text(encoding="utf-8"))
+        except Exception:
+            topics = []
+    with _LOCK:
+        STATE.update(
+            {"work_dir": wd, "topics": topics, "topic": topic, "publish": None}
+        )
     return api_state()
 
 
@@ -293,9 +420,13 @@ def api_topics_select():
         "refs": str(body.get("refs") or ""),
         "user_extra": str(body.get("user_extra") or ""),
     }
-    _ensure_run()
+    wd = _ensure_run()
     with _LOCK:
         STATE["topic"] = topic
+    # 落盘：历史记录重新打开时可恢复选题
+    (wd / "topic.json").write_text(
+        json.dumps(topic, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return jsonify({"topic": topic})
 
 
@@ -476,6 +607,7 @@ def _preview_payload(theme: str) -> dict:
     return {
         "title": title,
         "digest": make_digest(body),
+        "author": os.getenv("WECHAT_AUTHOR", ""),
         "preview": page,
         "theme": theme,
     }
@@ -497,11 +629,16 @@ def api_render():
 
 @app.post("/api/publish")
 def api_publish():
+    body = request.get_json(force=True) or {}
     with _LOCK:
-        theme = str((request.get_json(force=True) or {}).get("theme") or STATE["theme"])
+        theme = str(body.get("theme") or STATE["theme"])
         wd = STATE["work_dir"]
     if theme not in THEMES:
         theme = "default"
+    # 发布前可在界面上覆盖标题/摘要/作者（不落回 article.md，只影响本次草稿）
+    override_title = str(body.get("title") or "").strip()
+    override_digest = str(body.get("digest") or "").strip()
+    override_author = str(body.get("author") or "").strip()
     md = _article_path()
     if not md or wd is None:
         return jsonify({"error": "还没有文章"}), 400
@@ -513,8 +650,10 @@ def api_publish():
 
     def job(log):
         md_text = md.read_text(encoding="utf-8")
-        title, body = extract_title_and_body(md_text)
-        html = markdown_to_wechat_html(body, theme=theme)
+        title, body_md = extract_title_and_body(md_text)
+        if override_title:
+            title = override_title
+        html = markdown_to_wechat_html(body_md, theme=theme)
         (wd / "article.wechat.html").write_text(html, encoding="utf-8")
         client = WeChatClient(
             os.environ["WECHAT_APPID"].strip(), os.environ["WECHAT_APPSECRET"].strip()
@@ -539,8 +678,8 @@ def api_publish():
             title=title,
             content_html=html,
             thumb_media_id=thumb,
-            author=os.getenv("WECHAT_AUTHOR", ""),
-            digest=make_digest(body),
+            author=override_author or os.getenv("WECHAT_AUTHOR", ""),
+            digest=override_digest or make_digest(body_md),
             need_open_comment=int(os.getenv("WECHAT_NEED_COMMENT", "0") or 0),
         )
         (wd / "result.txt").write_text(
@@ -566,6 +705,19 @@ def api_task(tid: str):
         if not task:
             return jsonify({"error": "任务不存在"}), 404
         return jsonify(dict(task))
+
+
+@app.post("/api/task/<tid>/cancel")
+def api_task_cancel(tid: str):
+    """协作式取消：置标志，任务在下一个日志点退出（无法中断阻塞中的 HTTP 请求）。"""
+    with _LOCK:
+        task = TASKS.get(tid)
+        if not task:
+            return jsonify({"error": "任务不存在"}), 404
+        if task["status"] != "running":
+            return jsonify({"error": "任务已结束"}), 400
+        task["cancel"] = True
+    return jsonify({"ok": True})
 
 
 # ---------------- 设置 ----------------
