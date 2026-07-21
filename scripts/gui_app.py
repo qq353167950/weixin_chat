@@ -32,7 +32,14 @@ from app_paths import app_root  # noqa: E402
 # 窗口化 exe（console=False）里 stdout/stderr 为 None，任何 print 都会抛
 # AttributeError；重定向到日志文件，业务模块的 print 原样保留
 if sys.stdout is None or sys.stderr is None:
-    _log = open(app_root() / "app.log", "a", encoding="utf-8", buffering=1)
+    _log_path = app_root() / "app.log"
+    # 简单轮转：超 2MB 保留上一份为 app.log.1，防止无限增长
+    try:
+        if _log_path.exists() and _log_path.stat().st_size > 2 * 1024 * 1024:
+            _log_path.replace(_log_path.with_suffix(".log.1"))
+    except OSError:
+        pass
+    _log = open(_log_path, "a", encoding="utf-8", buffering=1)
     if sys.stdout is None:
         sys.stdout = _log
     if sys.stderr is None:
@@ -56,7 +63,7 @@ class Bridge:
         self.dirty = bool(value)
 
 
-def confirm_quit_native() -> bool:
+def confirm_native(text: str) -> bool:
     """原生确认框（Win32 MessageBox），可安全运行在 UI 线程。"""
     try:
         import ctypes
@@ -65,7 +72,7 @@ def confirm_quit_native() -> bool:
         # MB_YESNO | MB_ICONWARNING | MB_TOPMOST
         return (
             ctypes.windll.user32.MessageBoxW(
-                None, "文章有未保存的修改，确定退出吗？", WINDOW_TITLE, 0x04 | 0x30 | 0x40000
+                None, text, WINDOW_TITLE, 0x04 | 0x30 | 0x40000
             )
             == idyes
         )
@@ -161,9 +168,14 @@ def main() -> int:
         )
 
         def on_closing():
-            # 只读 Python 侧变量，绝不在此调 evaluate_js（会死锁）
+            # 只读 Python 侧状态，绝不在此调 evaluate_js（会死锁）
+            running = gui_server._running_task()
+            if running:
+                return confirm_native(
+                    f"「{running['name']}」仍在进行中，关闭会中断它。确定退出吗？"
+                )
             if bridge.dirty:
-                return confirm_quit_native()
+                return confirm_native("文章有未保存的修改，确定退出吗？")
             return True
 
         window.events.closing += on_closing

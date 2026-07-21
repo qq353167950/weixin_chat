@@ -61,6 +61,8 @@ from markdown_to_wechat_html import (  # noqa: E402
     markdown_to_wechat_html,
 )
 from topic_search import resolve_provider, search_hot_materials  # noqa: E402
+from task_hooks import TaskCancelled as TaskCancelledHook  # noqa: E402
+from task_hooks import clear_hooks, set_hooks  # noqa: E402
 from wechat_client import WeChatClient  # noqa: E402
 
 app = Flask(__name__)
@@ -89,12 +91,32 @@ def _evict_finished_tasks() -> None:
 
 
 class TaskCancelled(BaseException):
-    """任务被用户取消。
+    """已废弃：为兼容保留名字，实际使用 task_hooks.TaskCancelled。"""
 
-    继承 BaseException 而非 Exception：业务模块里的宽泛 except Exception
-    不会把取消信号吞掉，能一路抛到 worker 顶层。取消是协作式的，
-    在任务下一次调用 log() 时生效。
-    """
+
+# 任务快照给前端时隐藏内部字段
+def _task_view(task: dict) -> dict:
+    return {k: v for k, v in task.items() if k != "cancel"}
+
+
+def _running_task() -> dict | None:
+    """当前运行中的任务（单用户顺序流，同一时刻只允许一个后台任务）。"""
+    with _LOCK:
+        for t in TASKS.values():
+            if t["status"] == "running":
+                return t
+    return None
+
+
+def _reject_if_busy():
+    """有任务在跑时拒绝启动新任务：防止并发写作/配图写坏同一 article.md。"""
+    t = _running_task()
+    if t:
+        return (
+            jsonify({"error": f"「{t['name']}」正在进行中，请等它完成或先取消", "task": t["id"]}),
+            409,
+        )
+    return None
 
 
 def _new_task(name: str) -> dict:
@@ -102,8 +124,9 @@ def _new_task(name: str) -> dict:
         "id": uuid.uuid4().hex[:12],
         "name": name,
         "status": "running",   # running / done / error / cancelled
-        "cancel": False,       # 置 True 后任务在下一个日志点退出
+        "cancel": False,       # 置 True 后任务在下一个探针点退出
         "log": [],
+        "progress": "",        # 单行实时进度（界面原地刷新，不入日志）
         "result": None,
         "error": "",
     }
@@ -114,25 +137,41 @@ def _new_task(name: str) -> dict:
 
 
 def _run_task(name: str, fn) -> dict:
-    """后台线程执行 fn(task_log)；异常写入 task.error，取消置为 cancelled。"""
+    """后台线程执行 fn(task_log)；异常写入 task.error，取消置为 cancelled。
+
+    通过 task_hooks 把取消探针与进度回调下沉到耗时循环内部
+    （LLM 流式分块、逐条检索、逐图上传），取消秒级生效。
+    """
     task = _new_task(name)
 
     def log(msg: str) -> None:
         with _LOCK:
             if task["cancel"]:
-                raise TaskCancelled("已取消")
+                raise TaskCancelledHook("已取消")
             task["log"].append(str(msg))
+            task["progress"] = ""   # 新日志行意味着上一段进度已完结
+
+    def _cancelled() -> bool:
+        with _LOCK:
+            return bool(task["cancel"])
+
+    def _progress(msg: str) -> None:
+        with _LOCK:
+            task["progress"] = msg
 
     def worker() -> None:
+        set_hooks(cancel_check=_cancelled, progress=_progress)
         try:
             result = fn(log)
             with _LOCK:
                 task["result"] = result
                 task["status"] = "done"
-        except TaskCancelled:
+                task["progress"] = ""
+        except TaskCancelledHook:
             with _LOCK:
                 task["status"] = "cancelled"
                 task["error"] = "已取消"
+                task["progress"] = ""
         except Exception as e:  # 面向 UI：所有异常转文字
             with _LOCK:
                 if task["cancel"]:
@@ -141,6 +180,9 @@ def _run_task(name: str, fn) -> dict:
                 else:
                     task["error"] = str(e)
                     task["status"] = "error"
+                task["progress"] = ""
+        finally:
+            clear_hooks()
 
     threading.Thread(target=worker, daemon=True).start()
     return task
@@ -377,6 +419,9 @@ def api_runs_open():
 # ---------------- 选题 ----------------
 @app.post("/api/topics/search")
 def api_topics_search():
+    busy = _reject_if_busy()
+    if busy:
+        return busy
     body = request.get_json(force=True) or {}
     domain = str(body.get("domain") or os.getenv("SEARCH_DOMAIN", "")).strip()
     extra = str(body.get("extra") or "").strip()
@@ -438,6 +483,9 @@ def api_topics_select():
 # ---------------- 文章 ----------------
 @app.post("/api/article/write")
 def api_article_write():
+    busy = _reject_if_busy()
+    if busy:
+        return busy
     body = request.get_json(force=True) or {}
     mode = str(body.get("mode") or "llm")
     extra = str(body.get("user_extra") or "").strip()
@@ -515,6 +563,9 @@ def api_article_save():
 
 @app.post("/api/article/illustrate")
 def api_article_illustrate():
+    busy = _reject_if_busy()
+    if busy:
+        return busy
     md = _article_path()
     if not md:
         return jsonify({"error": "还没有文章"}), 400
@@ -536,6 +587,9 @@ def api_article_illustrate():
 # ---------------- 封面 ----------------
 @app.post("/api/cover/generate")
 def api_cover_generate():
+    busy = _reject_if_busy()
+    if busy:
+        return busy
     md = _article_path()
     if not md:
         return jsonify({"error": "还没有文章"}), 400
@@ -634,6 +688,9 @@ def api_render():
 
 @app.post("/api/publish")
 def api_publish():
+    busy = _reject_if_busy()
+    if busy:
+        return busy
     body = request.get_json(force=True) or {}
     with _LOCK:
         theme = str(body.get("theme") or STATE["theme"])
@@ -709,12 +766,12 @@ def api_task(tid: str):
         task = TASKS.get(tid)
         if not task:
             return jsonify({"error": "任务不存在"}), 404
-        return jsonify(dict(task))
+        return jsonify(_task_view(task))
 
 
 @app.post("/api/task/<tid>/cancel")
 def api_task_cancel(tid: str):
-    """协作式取消：置标志，任务在下一个日志点退出（无法中断阻塞中的 HTTP 请求）。"""
+    """协作式取消：置标志，任务在下一个探针点退出（LLM 流式分块也是探针）。"""
     with _LOCK:
         task = TASKS.get(tid)
         if not task:
@@ -722,6 +779,21 @@ def api_task_cancel(tid: str):
         if task["status"] != "running":
             return jsonify({"error": "任务已结束"}), 400
         task["cancel"] = True
+    return jsonify({"ok": True})
+
+
+@app.post("/api/quit")
+def api_quit():
+    """退出程序（浏览器回退模式专用：关标签页杀不掉进程，给个明确出口）。
+
+    桌面窗口模式下由关窗退出，此接口同样有效。
+    延迟半秒退出，让响应先送达前端。
+    """
+    t = _running_task()
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    if t and not force:
+        return jsonify({"error": f"「{t['name']}」仍在进行中", "task": t["id"]}), 409
+    threading.Timer(0.5, lambda: os._exit(0)).start()
     return jsonify({"ok": True})
 
 

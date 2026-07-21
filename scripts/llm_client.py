@@ -17,6 +17,7 @@ import time
 from typing import Any, Iterable
 
 from http_util import request_json, with_session
+from task_hooks import check_cancelled, report_progress
 
 
 def llm_config() -> dict[str, str]:
@@ -27,9 +28,15 @@ def llm_config() -> dict[str, str]:
 
 
 def parse_sse_content(lines: Iterable[str]) -> str:
-    """从 SSE 行流拼出 chat.completion.chunk 的 delta 内容（纯函数，便于自测）。"""
+    """从 SSE 行流拼出 chat.completion.chunk 的 delta 内容（纯函数，便于自测）。
+
+    每个分块都是取消探针点：GUI 里点「取消」秒级生效，
+    同时把累计字数上报为实时进度。
+    """
     parts: list[str] = []
+    total = 0
     for raw in lines:
+        check_cancelled()
         if not raw or not raw.startswith("data:"):
             continue
         data = raw[5:].strip()
@@ -43,6 +50,8 @@ def parse_sse_content(lines: Iterable[str]) -> str:
             continue
         if piece:
             parts.append(piece)
+            total += len(piece)
+            report_progress(f"已生成 {total} 字…")
     return "".join(parts)
 
 
@@ -52,6 +61,7 @@ def _chat_stream(url: str, headers: dict, payload: dict, timeout: int, retries: 
     payload["stream"] = True
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
+        check_cancelled()
         try:
             def _do(sess):
                 with sess.post(

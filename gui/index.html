@@ -388,6 +388,7 @@
     <button class="env-pill" data-page="settings" id="env-pill">
       <span class="env-dot" id="env-dot"></span>设置
     </button>
+    <button class="env-pill" id="btn-quit-app" style="display:none" title="停止本地服务并退出">退出</button>
   </div>
 </nav>
 
@@ -672,14 +673,38 @@ function toast(msg, ms = 2600) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  // 所有普通接口 20s 超时：服务假死时不再永久转圈（任务轮询单独长跑）
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs || 20000);
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error("请求超时，本地服务可能未响应");
+    throw new Error("无法连接本地服务（程序是否已退出？）");
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+/* 全局忙碌门控：有后台任务时禁用所有「启动类」按钮，防误触发 409 */
+const BUSY_BTNS = ["btn-search", "btn-custom", "btn-write", "btn-rewrite",
+                   "btn-illustrate", "btn-cover-ai", "btn-cover-template", "btn-publish"];
+let BUSY = false;
+function setBusy(v) {
+  BUSY = v;
+  BUSY_BTNS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el._selfSpinning) el.disabled = v;
+  });
 }
 
 /* 苹果风确认弹窗（替代原生 confirm） */
@@ -706,6 +731,9 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
   consoleEl.innerHTML = "";
   let shown = 0;
   let cancelLine = null;
+  // 实时进度行（原地刷新，区别于追加式日志）
+  const progLine = document.createElement("div");
+  progLine.style.color = "#8ab4f8";
   if (cancellable) {
     cancelLine = document.createElement("div");
     cancelLine.className = "cancel-line";
@@ -713,35 +741,54 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
     cbtn.textContent = "取消任务";
     cbtn.onclick = async () => {
       cbtn.disabled = true;
-      cbtn.textContent = "正在取消…";
+      cbtn.textContent = "正在取消…（数秒内生效）";
       try { await api(`/api/task/${taskId}/cancel`, { method: "POST" }); } catch (_) {}
     };
     cancelLine.appendChild(cbtn);
   }
-  if (btn) { btn.disabled = true; btn._old = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>' + btn.textContent; }
+  if (btn) { btn.disabled = true; btn._selfSpinning = true; btn._old = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>' + btn.textContent; }
+  setBusy(true);
+  let misses = 0;   // 轮询连续失败计数：偶发失败容忍，连续失败判定服务失联
   try {
     while (true) {
-      const t = await api(`/api/task/${taskId}`);
+      let t;
+      try {
+        t = await api(`/api/task/${taskId}`, { timeoutMs: 8000 });
+        misses = 0;
+      } catch (e) {
+        if (++misses >= 4) throw new Error("与本地服务失联，请重启程序后到「历史」找回产出");
+        await new Promise(r => setTimeout(r, 1200));
+        continue;
+      }
       for (; shown < t.log.length; shown++) {
         const div = document.createElement("div");
         div.textContent = t.log[shown];
         if (/成功|完成|干净/.test(t.log[shown])) div.className = "okline";
         consoleEl.appendChild(div);
       }
+      // 进度行/取消行保持在末尾（appendChild 对已有节点是移动）
+      if (t.progress) {
+        progLine.textContent = "⏳ " + t.progress;
+        consoleEl.appendChild(progLine);
+      } else {
+        progLine.remove();
+      }
       if (cancelLine && t.status === "running") {
-        consoleEl.appendChild(cancelLine);  // 始终保持在末尾
+        consoleEl.appendChild(cancelLine);
       } else if (cancelLine) {
         cancelLine.remove();
       }
       consoleEl.scrollTop = consoleEl.scrollHeight;
-      if (t.status === "done") return t.result;
+      if (t.status === "done") { progLine.remove(); return t.result; }
       if (t.status === "cancelled") {
+        progLine.remove();
         const div = document.createElement("div");
         div.textContent = "— 任务已取消 —";
         consoleEl.appendChild(div);
         throw new Error("已取消");
       }
       if (t.status === "error") {
+        progLine.remove();
         const div = document.createElement("div");
         div.className = "err";
         div.textContent = "✗ " + t.error;
@@ -752,7 +799,9 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
     }
   } finally {
     if (cancelLine) cancelLine.remove();
-    if (btn) { btn.disabled = false; btn.innerHTML = btn._old; }
+    progLine.remove();
+    if (btn) { btn.disabled = false; btn._selfSpinning = false; btn.innerHTML = btn._old; }
+    setBusy(false);
   }
 }
 
@@ -1224,6 +1273,26 @@ $("#btn-save-settings").addEventListener("click", async () => {
     await refreshState();
     toast("设置已保存并生效");
   } catch (e) { toast("失败：" + e.message, 4000); }
+});
+
+/* 浏览器回退模式：显示「退出」按钮（桌面窗口关窗即退，无需此入口） */
+(function initQuitBtn() {
+  const inDesktop = !!window.pywebview;
+  // pywebview 注入时机可能晚于脚本执行，延迟再判一次
+  setTimeout(() => {
+    if (!window.pywebview) $("#btn-quit-app").style.display = "";
+  }, 1500);
+  if (inDesktop) return;
+})();
+$("#btn-quit-app").addEventListener("click", async () => {
+  const ok = await askConfirm("退出程序？", "将停止本地服务，未保存的编辑会丢失。");
+  if (!ok) return;
+  try {
+    await api("/api/quit", { method: "POST", body: { force: BUSY } });
+  } catch (e) {
+    if (!/失联|超时/.test(e.message)) { toast(e.message, 3500); return; }
+  }
+  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">程序已退出，可以关闭此页面了</div>';
 });
 
 /* ================= 首次启动引导 ================= */

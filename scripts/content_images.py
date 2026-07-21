@@ -24,6 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 from http_util import request_bytes
+from task_hooks import check_cancelled, report_progress
 from wechat_client import WeChatClient
 
 # 微信图床域名，已经可用，无需二次上传
@@ -80,6 +81,8 @@ def replace_content_images(
     """
     report: list[str] = []
     uploaded: dict[str, str] = {}  # src -> mmbiz url，同图去重
+    total = count_external_images(html)
+    seq = {"n": 0}
 
     def _repl(m: re.Match) -> str:
         src = m.group(2)
@@ -87,6 +90,9 @@ def replace_content_images(
             return m.group(0)
         if src in uploaded:
             return m.group(1) + uploaded[src] + m.group(3)
+        check_cancelled()
+        seq["n"] += 1
+        report_progress(f"转存图片 {seq['n']}/{total}：{src[:40]}…")
         try:
             raw = _load_image_bytes(src, base_dir)
             raw = _compress_to_limit(raw)

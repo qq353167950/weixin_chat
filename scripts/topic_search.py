@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import quote_plus, unquote
 
 from http_util import request_json
+from task_hooks import check_cancelled, report_progress
 
 # 各搜索源对应的 Key 环境变量（multi 模式据此发现可用源）
 PROVIDER_KEY_ENV = {
@@ -339,8 +340,12 @@ def _interleave(groups: list[list[dict[str, str]]]) -> list[dict[str, str]]:
 
 
 def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
-    """所有已配置 Key 的搜索源并发搜同一个词，结果交错合并。"""
-    from concurrent.futures import ThreadPoolExecutor
+    """所有已配置 Key 的搜索源并发搜同一个词，结果交错合并。
+
+    用 as_completed + 总超时：不被最慢的源拖死（此前逐个 result(60s)
+    最坏等待为各源之和）。超时未回的源计入失败，不阻塞整体。
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait
 
     providers = configured_providers()
     table = {
@@ -351,15 +356,21 @@ def search_multi(query: str, n: int = 8) -> list[dict[str, str]]:
         "duckduckgo": search_duckduckgo,
     }
     fns = [(p, table[p]) for p in providers if p in table]
+    overall = float(os.getenv("SEARCH_MULTI_TIMEOUT", "45") or 45)
     groups: list[list[dict[str, str]]] = []
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=len(fns)) as pool:
         futures = {pool.submit(fn, query, n): p for p, fn in fns}
-        for fut, p in futures.items():
+        done, pending = wait(futures, timeout=overall)
+        for fut in done:
+            p = futures[fut]
             try:
-                groups.append(fut.result(timeout=60))
+                groups.append(fut.result())
             except Exception as e:
                 errors.append(f"{p}: {e}")
+        for fut in pending:
+            errors.append(f"{futures[fut]}: 超过 {overall:.0f}s 未响应，放弃")
+            fut.cancel()
     if not groups:
         raise RuntimeError("multi 搜索全部失败：" + "；".join(errors[:3]))
     if errors:
@@ -399,8 +410,10 @@ def search_hot_materials(
         print(f"[搜索] provider=multi（并发源：{'+'.join(configured_providers())}）")
     else:
         print(f"[搜索] provider={provider}")
-    for q in queries:
+    for i, q in enumerate(queries, 1):
+        check_cancelled()
         print(f"  - 检索: {q}")
+        report_progress(f"检索 {i}/{len(queries)}：{q[:30]}…")
         try:
             items = search_one(q, provider=provider)
             print(f"    得到 {len(items)} 条")
