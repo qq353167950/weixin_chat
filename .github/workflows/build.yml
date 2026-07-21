@@ -66,14 +66,20 @@ jobs:
 
       - name: 发布 Release（仅 tag 触发）
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        # GitHub Release 附件不支持非 ASCII 文件名（会变成 default.exe），先复制为英文名
+        run: Copy-Item "dist\公众号助手.exe" "dist\wechat-assistant.exe"
+
+      - name: 创建 Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/公众号助手.exe
+          files: dist/wechat-assistant.exe
           generate_release_notes: true
           body: |
             ## 公众号助手 Windows 桌面客户端
 
-            **使用方法**：下载 `公众号助手.exe`，放到任意文件夹双击运行。
+            **使用方法**：下载 `wechat-assistant.exe`，放到任意文件夹双击运行。
             打开的是独立桌面窗口（非浏览器），首次运行自动在同目录生成
             `.env` 配置文件，可在设置页填写各项 Key。产出保存在同目录 `runs/` 下。
 
