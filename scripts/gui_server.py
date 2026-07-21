@@ -874,7 +874,7 @@ SETTINGS_SCHEMA = [
     },
     {
         "group": "联网搜索",
-        "desc": "真实搜索热点素材（SEARCH_*）",
+        "desc": "真实搜索热点素材（SEARCH_*）；开关关闭的源即使配了 Key 也不参与",
         "fields": [
             {
                 "key": "SEARCH_PROVIDER",
@@ -884,9 +884,14 @@ SETTINGS_SCHEMA = [
             },
             {"key": "SEARCH_DOMAIN", "label": "账号领域关键词"},
             {"key": "TAVILY_API_KEY", "label": "Tavily Key", "secret": True},
+            {"key": "SEARCH_ENABLE_TAVILY", "label": "启用 Tavily", "type": "toggle"},
             {"key": "BOCHA_API_KEY", "label": "博查 Key", "secret": True},
+            {"key": "SEARCH_ENABLE_BOCHA", "label": "启用 博查", "type": "toggle"},
             {"key": "BING_API_KEY", "label": "Bing Key", "secret": True},
+            {"key": "SEARCH_ENABLE_BING", "label": "启用 Bing", "type": "toggle"},
             {"key": "SERPER_API_KEY", "label": "Serper Key", "secret": True},
+            {"key": "SEARCH_ENABLE_SERPER", "label": "启用 Serper", "type": "toggle"},
+            {"key": "SEARCH_ENABLE_DUCKDUCKGO", "label": "启用 DuckDuckGo（免费兜底）", "type": "toggle"},
         ],
     },
     {
@@ -977,6 +982,10 @@ def api_close_action_set():
 @app.get("/api/settings")
 def api_settings_get():
     values = read_env_values(ROOT / ".env")
+    # 搜索源开关默认开：.env 未写该键时，界面开关应显示为开启（与后端行为一致）
+    for f in [f for g in SETTINGS_SCHEMA for f in g["fields"] if f.get("type") == "toggle"]:
+        if f["key"].startswith("SEARCH_ENABLE_") and f["key"] not in values:
+            values[f["key"]] = "1"
     return jsonify({"schema": SETTINGS_SCHEMA, "values": values})
 
 

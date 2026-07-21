@@ -39,6 +39,22 @@ PROVIDER_KEY_ENV = {
     "serper": "SERPER_API_KEY",
 }
 
+# 各源启用开关的环境变量（默认 1；配了 Key 但想临时停用某源时置 0）
+PROVIDER_ENABLE_ENV = {
+    "tavily": "SEARCH_ENABLE_TAVILY",
+    "bocha": "SEARCH_ENABLE_BOCHA",
+    "bing": "SEARCH_ENABLE_BING",
+    "serper": "SEARCH_ENABLE_SERPER",
+    "duckduckgo": "SEARCH_ENABLE_DUCKDUCKGO",
+}
+
+
+def provider_enabled(name: str) -> bool:
+    env = PROVIDER_ENABLE_ENV.get(name)
+    if not env:
+        return True
+    return os.getenv(env, "1").strip() != "0"
+
 # 每日轮换的检索切入角度：同一领域每天搜索方向不同，素材随之变化
 _DAILY_ANGLES = [
     "避坑 教训", "真实案例", "方法 技巧", "工具 实操", "数据 报告",
@@ -59,8 +75,17 @@ def _headers() -> dict[str, str]:
 
 
 def configured_providers() -> list[str]:
-    """已配置 Key 的搜索源列表；一个都没配则退到免费 duckduckgo。"""
-    out = [p for p, env in PROVIDER_KEY_ENV.items() if os.getenv(env, "").strip()]
+    """已配置 Key 且未被开关关闭的搜索源；一个都没有则退到免费 duckduckgo。
+
+    duckduckgo 也可用 SEARCH_ENABLE_DUCKDUCKGO=0 关闭，
+    但全部源都被关掉时仍兜底 duckduckgo（否则搜索完全不可用）。
+    """
+    out = [
+        p for p, env in PROVIDER_KEY_ENV.items()
+        if os.getenv(env, "").strip() and provider_enabled(p)
+    ]
+    if not out and provider_enabled("duckduckgo"):
+        return ["duckduckgo"]
     return out or ["duckduckgo"]
 
 
