@@ -80,6 +80,29 @@ def confirm_native(text: str) -> bool:
         return True  # 非 Windows 或调用失败：不阻塞退出
 
 
+# 实例锁：最多允许 2 个实例同时运行
+_instance_locks: list[socket.socket] = []
+LOCK_PORTS = [18093, 18094]  # 两个锁端口，对应 2 个实例槽位
+
+
+def acquire_instance_slot() -> bool:
+    """尝试占用一个实例槽位（绑定锁端口），成功返回 True。
+
+    返回 False 表示已有 2 个实例在运行，应拒绝启动。
+    全局 _instance_locks 持有 socket 对象，进程退出时自动释放端口。
+    """
+    for lock_port in LOCK_PORTS:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)  # 禁止复用
+            sock.bind(("127.0.0.1", lock_port))
+            _instance_locks.append(sock)  # 持有引用，保持端口占用
+            return True
+        except OSError:
+            continue  # 该槽位已被占用，尝试下一个
+    return False  # 所有槽位都满了
+
+
 def pick_port(preferred: int) -> int:
     """优先用配置端口；被占用则让系统分配空闲端口（桌面模式端口无需固定）。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -133,6 +156,15 @@ def main() -> int:
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+    # 实例数量检查：最多 2 个
+    if not acquire_instance_slot():
+        msg = "已有 2 个实例正在运行，无法启动更多实例。\n\n请关闭其中一个窗口后重试。"
+        try:
+            confirm_native(msg)  # 用原生对话框提示（桌面环境）
+        except Exception:
+            print(f"[错误] {msg}", file=sys.stderr)
+        return 1
 
     import os
 
