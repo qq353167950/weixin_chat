@@ -87,15 +87,25 @@ def pick_port(preferred: int) -> int:
 
 
 def start_server(port: int) -> None:
-    threading.Thread(
-        target=lambda: gui_server.app.run(
-            host="127.0.0.1", port=port, debug=False, threaded=True
-        ),
-        daemon=True,
-    ).start()
+    def _run() -> None:
+        try:
+            # 不用 app.run：其启动横幅会做主机名反查，macOS 上可能阻塞数十秒
+            from werkzeug.serving import make_server
+
+            srv = make_server("127.0.0.1", port, gui_server.app, threaded=True)
+            print(f" * 本地服务已监听 http://127.0.0.1:{port}")
+            srv.serve_forever()
+        except BaseException:
+            # daemon 线程异常默认无声无息，冒烟/诊断时必须能看到根因
+            import traceback
+
+            print("[错误] Flask 服务线程崩溃：", file=sys.stderr)
+            traceback.print_exc()
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
-def wait_ready(url: str, timeout: float = 15.0) -> bool:
+def wait_ready(url: str, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:

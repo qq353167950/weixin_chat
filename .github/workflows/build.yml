@@ -123,11 +123,16 @@ jobs:
 
       - name: 冒烟验证 .app 内可执行文件可启动（--server 模式）
         run: |
-          "./dist/公众号助手.app/Contents/MacOS/公众号助手" --server &
+          "./dist/公众号助手.app/Contents/MacOS/公众号助手" --server > smoke.log 2>&1 &
           APP_PID=$!
-          sleep 20
-          curl -sf http://127.0.0.1:8093/ > /dev/null || { echo "首页请求失败"; kill $APP_PID; exit 1; }
-          curl -sf http://127.0.0.1:8093/api/state > /dev/null || { echo "/api/state 请求失败"; kill $APP_PID; exit 1; }
+          for i in $(seq 1 40); do
+            sleep 1
+            curl -sf --noproxy '*' http://127.0.0.1:8093/ > /dev/null && break
+          done
+          if ! curl -sf --noproxy '*' http://127.0.0.1:8093/ > /dev/null; then
+            echo "首页请求失败，启动日志："; cat smoke.log; kill $APP_PID 2>/dev/null; exit 1
+          fi
+          curl -sf --noproxy '*' http://127.0.0.1:8093/api/state > /dev/null || { echo "/api/state 请求失败"; cat smoke.log; kill $APP_PID 2>/dev/null; exit 1; }
           echo "mac 启动冒烟通过"
           kill $APP_PID
 
