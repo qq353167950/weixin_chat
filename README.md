@@ -1,11 +1,11 @@
 # 一键：公众号写作 → 排版 → 草稿箱
 
-> **三种用法，推荐图形界面：**
-> - **单文件 exe**（免装 Python）：从 GitHub Releases 下载 `wechat-assistant.exe`，放任意文件夹双击运行；首次运行自动在同目录生成 `.env`，产出在同目录 `runs/`
-> - **图形界面**：双击 `GUI.bat`，浏览器打开苹果风格操作页（选题 → 文章 → 封面 → 预览发布 → 设置）
+> **三种用法，推荐桌面客户端：**
+> - **桌面客户端 exe**（免装 Python）：从 GitHub Releases 下载 `公众号助手.exe`，放任意文件夹双击运行——**独立原生窗口，不依赖浏览器**，苹果风格界面（选题 → 文章 → 封面 → 预览发布 → 历史 → 设置）；首次运行自动在同目录生成 `.env`，产出在同目录 `runs/`
+> - **源码运行**：双击 `GUI.bat`，同样打开桌面窗口（首次自动建环境）
 > - **命令行**：双击 `START_HERE.bat`，终端交互式全流程
 >
-> 首次使用：填 `.env`（或直接在 GUI 设置页填）→ `show_my_ip.bat` 查 IP → **自己**去公众号后台加 IP 白名单
+> 首次使用：填 `.env`（或直接在设置页填）→ `show_my_ip.bat` 查 IP → **自己**去公众号后台加 IP 白名单
 
 目标链路：
 
@@ -108,15 +108,19 @@ python scripts/one_click_publish.py --md samples/demo.md --cover samples/cover.j
 
 ```text
 wechat-auto-publish-windows/
-├── GUI.bat                         # 图形界面入口（推荐双击这个）
+├── GUI.bat                         # 桌面客户端入口（推荐双击这个）
 ├── START_HERE.bat                  # 命令行全流程入口
+├── build_exe.bat                   # 本地打包单文件 exe
+├── build.spec                      # PyInstaller 配置
 ├── .env.example                    # 配置模板（四组独立）
 ├── requirements.txt
 ├── gui/index.html                  # 苹果风格前端单页
 ├── samples/demo.md                 # 示例文章
 ├── runs/<时间戳>/                  # 每次流程的产出（文章/封面/配图/HTML/预览）
 └── scripts/
+    ├── gui_app.py                  # 桌面客户端入口（原生窗口，pywebview）
     ├── gui_server.py               # GUI 本地服务（Flask，复用下方模块）
+    ├── app_paths.py                # 源码/exe 两种形态的路径出口
     ├── pipeline.py                 # 命令行全流程
     ├── article_writer.py           # 选题整理/反AI腔写作/参考抓取/教程配图
     ├── one_click_publish.py        # 命令行一键发布已有 Markdown

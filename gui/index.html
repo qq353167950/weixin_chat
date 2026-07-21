@@ -680,6 +680,7 @@ let MD_DIRTY = false;      // 编辑器有未保存修改
 
 function setDirty(v) {
   MD_DIRTY = v;
+  window.MD_DIRTY = v;   // 暴露给桌面客户端的关窗确认钩子（gui_app.py）
   $("#dirty-dot").style.display = v ? "" : "none";
 }
 

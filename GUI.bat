@@ -47,7 +47,7 @@ if %NEED_INSTALL%==1 (
   copy /Y "requirements.txt" ".venv-requirements.hash" >nul
 )
 
-".venv\Scripts\python.exe" scripts\gui_server.py
+".venv\Scripts\python.exe" scripts\gui_app.py
 set ERR=%ERRORLEVEL%
 echo.
 if not %ERR%==0 (

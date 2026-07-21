@@ -17,5 +17,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Done: dist\wechat-assistant.exe
+echo Done: dist\公众号助手.exe
 pause

@@ -44,8 +44,9 @@ jobs:
       - name: 冒烟验证 exe 可启动
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "dist\wechat-assistant.exe" -PassThru -WorkingDirectory (New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force)
-          Start-Sleep -Seconds 15
+          # 桌面 exe 无控制台，CI 无显示环境 → 用 --server 模式仅起 HTTP 服务冒烟
+          $proc = Start-Process -FilePath "dist\公众号助手.exe" -ArgumentList "--server" -PassThru -WorkingDirectory (New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force)
+          Start-Sleep -Seconds 20
           try {
             $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8093/" -UseBasicParsing -TimeoutSec 10
             if ($resp.StatusCode -ne 200) { throw "首页返回 $($resp.StatusCode)" }
@@ -60,20 +61,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wechat-assistant-windows
-          path: dist/wechat-assistant.exe
+          path: dist/公众号助手.exe
           retention-days: 30
 
       - name: 发布 Release（仅 tag 触发）
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/wechat-assistant.exe
+          files: dist/公众号助手.exe
           generate_release_notes: true
           body: |
-            ## 公众号助手 Windows 单文件版
+            ## 公众号助手 Windows 桌面客户端
 
-            **使用方法**：下载 `wechat-assistant.exe`，放到任意文件夹双击运行。
-            首次运行会在同目录自动生成 `.env` 配置文件，可在浏览器打开的
-            设置页里填写各项 Key。产出保存在同目录 `runs/` 下。
+            **使用方法**：下载 `公众号助手.exe`，放到任意文件夹双击运行。
+            打开的是独立桌面窗口（非浏览器），首次运行自动在同目录生成
+            `.env` 配置文件，可在设置页填写各项 Key。产出保存在同目录 `runs/` 下。
 
-            无需安装 Python，无需任何依赖。
+            无需安装 Python，无需任何依赖。需要 Windows 10/11
+            自带的 Edge WebView2（绝大多数系统已内置；缺失时自动回退浏览器模式）。
