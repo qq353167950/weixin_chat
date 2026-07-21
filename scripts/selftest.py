@@ -127,6 +127,28 @@ def test_render_all_themes() -> None:
     check("有序列表保留为 <ol>", "<ol" in html)
 
 
+def test_typography() -> None:
+    print("[2b] 排版细节（舒适度增强）")
+    md = (
+        "我在用AI写作3篇文章，效率提升200%。\n\n"
+        "> 金句引用测试\n\n"
+        "```python\nprint('hi')\n```\n\n"
+        "| 列A | 列B |\n| --- | --- |\n| 甲 | 乙 |\n| 丙 | 丁 |\n| 戊 | 己 |\n"
+    )
+    html = markdown_to_wechat_html(md, theme="default")
+    check("盘古之白（中英文之间加空格）",
+          "用 AI 写作 3 篇" in html and "提升 200%" in html)
+    check("段落两端对齐", "text-align:justify" in html)
+    check("代码块 Mac 深色风", "#282c34" in html and "#fc625d" in html)
+    check("引用卡片带大引号装饰", "❝" in html)
+    check("表格斑马纹（第二行有底色）",
+          html.count("background:#f2faf5") >= 2)  # 表头 + 偶数行
+    check("文末 END 标记", ">END</span>" in html)
+    check("行内代码不受盘古之白影响",
+          "print" in markdown_to_wechat_html("行内`代码abc测试`保持原样", theme="default")
+          or "代码abc测试" in markdown_to_wechat_html("行内`代码abc测试`保持原样", theme="default"))
+
+
 def test_digest() -> None:
     print("[3] 摘要生成")
     _, body = extract_title_and_body(FIXTURE_MD)
@@ -186,6 +208,7 @@ def main() -> int:
     tests = [
         test_extract_title,
         test_render_all_themes,
+        test_typography,
         test_digest,
         test_preview,
         test_template_cover,

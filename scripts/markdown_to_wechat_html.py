@@ -42,8 +42,6 @@ THEMES: dict[str, dict[str, str]] = {
         "quote_color": "#5f6b66",
         "code_bg": "#f2f3f5",
         "code_color": "#c7254e",
-        "pre_bg": "#f7f8fa",
-        "pre_color": "#40485b",
         "link_color": "#576b95",
         "table_border": "#e8e8e8",
         "th_bg": "#f2faf5",
@@ -67,8 +65,6 @@ THEMES: dict[str, dict[str, str]] = {
         "quote_color": "#8a6d60",
         "code_bg": "#fdf2ee",
         "code_color": "#c2410c",
-        "pre_bg": "#fdf8f6",
-        "pre_color": "#57423a",
         "link_color": "#576b95",
         "table_border": "#f0e0d6",
         "th_bg": "#fff3ec",
@@ -92,8 +88,6 @@ THEMES: dict[str, dict[str, str]] = {
         "quote_color": "#5c637a",
         "code_bg": "#eef2ff",
         "code_color": "#3b5bdb",
-        "pre_bg": "#f5f7ff",
-        "pre_color": "#3d4566",
         "link_color": "#576b95",
         "table_border": "#dfe4f5",
         "th_bg": "#eef2ff",
@@ -117,8 +111,6 @@ THEMES: dict[str, dict[str, str]] = {
         "quote_color": "#666666",
         "code_bg": "#f2f2f2",
         "code_color": "#d63384",
-        "pre_bg": "#f7f7f7",
-        "pre_color": "#333333",
         "link_color": "#576b95",
         "table_border": "#e5e5e5",
         "th_bg": "#fafafa",
@@ -132,6 +124,29 @@ _FONT_STACK = (
     "'Hiragino Sans GB','Microsoft YaHei',Arial,sans-serif"
 )
 _MONO_STACK = "Menlo,Consolas,'Courier New',monospace"
+
+# 代码块统一深色（One Dark 配色）：四套主题下都有高级感且对比充分
+_CODE_BLOCK_BG = "#282c34"
+_CODE_BLOCK_TEXT = "#abb2bf"
+_CODE_DOTS_BAR = (
+    '<section style="padding:10px 14px;background:#21252b;'
+    'border-radius:10px 10px 0 0;line-height:1;font-size:0;">'
+    '<span style="display:inline-block;width:11px;height:11px;border-radius:50%;'
+    'background:#fc625d;"></span>'
+    '<span style="display:inline-block;width:11px;height:11px;border-radius:50%;'
+    'background:#fdbc40;margin-left:7px;"></span>'
+    '<span style="display:inline-block;width:11px;height:11px;border-radius:50%;'
+    'background:#35cd4b;margin-left:7px;"></span></section>'
+)
+
+# 盘古之白：中文与英文/数字之间加空格，仅作用于渲染输出，不改动原稿
+_PANGU_CJK_LATIN = re.compile(r"([一-鿿])([A-Za-z0-9])")
+_PANGU_LATIN_CJK = re.compile(r"([A-Za-z0-9])([一-鿿])")
+
+
+def _pangu(text: str) -> str:
+    text = _PANGU_CJK_LATIN.sub(r"\1 \2", text)
+    return _PANGU_LATIN_CJK.sub(r"\1 \2", text)
 
 # 微信自家域名的链接不会被过滤，可保留为真实 <a>
 _WECHAT_LINK_RE = re.compile(r"^https?://mp\.weixin\.qq\.com/", re.I)
@@ -164,6 +179,9 @@ class _Renderer:
 
         text = re.sub(r"`([^`]+)`", _stash_code, text)
 
+        # 盘古之白：中英文之间加空隙（行内代码已被占位符保护，不受影响）
+        text = _pangu(text)
+
         # 行内图片（罕见，正文图片通常独占一行）
         text = re.sub(
             r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)',
@@ -175,7 +193,7 @@ class _Renderer:
         # 链接：微信域名保留 <a>，外链转脚注
         text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", self._link_repl, text)
 
-        # 粗体 / 斜体 / 删除线
+        # 粗体 / 斜体 / 删除线（斜体加主题色：中文字形斜体不明显，颜色补足强调感）
         text = re.sub(
             r"\*\*(.+?)\*\*",
             rf'<strong style="color:{self.t["strong_color"]};font-weight:700;">\1</strong>',
@@ -183,7 +201,7 @@ class _Renderer:
         )
         text = re.sub(
             r"(?<!\*)\*([^*]+?)\*(?!\*)",
-            r'<em style="font-style:italic;">\1</em>',
+            rf'<em style="font-style:italic;color:{self.t["accent"]};">\1</em>',
             text,
         )
         text = re.sub(
@@ -219,9 +237,10 @@ class _Renderer:
     # ---------- 块级元素 ----------
     def paragraph(self, text: str) -> str:
         return (
-            f'<p style="margin:14px 0;font-size:{self.t["font_size"]};'
+            f'<p style="margin:16px 0;font-size:{self.t["font_size"]};'
             f'line-height:{self.t["line_height"]};color:{self.t["text_color"]};'
-            f'letter-spacing:{self.t["letter_spacing"]};">{self.inline(text)}</p>'
+            f'letter-spacing:{self.t["letter_spacing"]};text-align:justify;">'
+            f"{self.inline(text)}</p>"
         )
 
     def h2(self, text: str) -> str:
@@ -282,40 +301,52 @@ class _Renderer:
             f'<li style="margin:8px 0;font-size:{self.t["font_size"]};'
             f'line-height:{self.t["line_height"]};color:{self.t["accent"]};">'
             f'<span style="color:{self.t["text_color"]};'
-            f'letter-spacing:{self.t["letter_spacing"]};">{self.inline(x)}</span></li>'
+            f'letter-spacing:{self.t["letter_spacing"]};text-align:justify;">'
+            f"{self.inline(x)}</span></li>"
             for x in items
         )
-        return f'<{tag} style="margin:14px 0;padding-left:1.6em;">{lis}</{tag}>'
+        return f'<{tag} style="margin:16px 0;padding-left:1.6em;">{lis}</{tag}>'
 
     def blockquote(self, lines: list[str]) -> str:
         body = "<br>".join(self.inline(x) for x in lines)
+        # 卡片式金句：大引号装饰 + 圆角 + 主题色细线
         return (
-            f'<blockquote style="margin:18px 0;padding:12px 16px;'
+            f'<blockquote style="margin:20px 0;padding:14px 18px 16px;'
             f'border-left:4px solid {self.t["quote_border"]};background:{self.t["quote_bg"]};'
-            f'border-radius:0 8px 8px 0;color:{self.t["quote_color"]};'
-            f'font-size:15px;line-height:1.8;">{body}</blockquote>'
+            f'border-radius:0 12px 12px 0;font-size:15px;line-height:1.9;">'
+            f'<span style="display:block;font-size:26px;line-height:1;'
+            f'color:{self.t["quote_border"]};font-family:Georgia,serif;'
+            f'margin-bottom:2px;">❝</span>'
+            f'<span style="color:{self.t["quote_color"]};text-align:justify;'
+            f'display:block;">{body}</span></blockquote>'
         )
 
     def code_block(self, lines: list[str]) -> str:
         code = html_mod.escape("\n".join(lines))
+        # Mac 窗口三点装饰 + One Dark 深色底：技术文的高级感来源
         return (
-            f'<pre style="margin:16px 0;padding:14px 16px;background:{self.t["pre_bg"]};'
-            f'border:1px solid {self.t["table_border"]};border-radius:8px;overflow-x:auto;'
-            f'font-size:13px;line-height:1.7;"><code style="font-family:{_MONO_STACK};'
-            f'color:{self.t["pre_color"]};white-space:pre;">{code}</code></pre>'
+            '<section style="margin:20px 0;border-radius:10px;overflow:hidden;'
+            'box-shadow:0 4px 14px rgba(0,0,0,0.12);">'
+            f"{_CODE_DOTS_BAR}"
+            f'<pre style="margin:0;padding:14px 16px;background:{_CODE_BLOCK_BG};'
+            f'overflow-x:auto;font-size:13px;line-height:1.75;">'
+            f'<code style="font-family:{_MONO_STACK};color:{_CODE_BLOCK_TEXT};'
+            f'white-space:pre;">{code}</code></pre></section>'
         )
 
     def figure(self, src: str, alt: str = "") -> str:
         cap = ""
         if alt.strip():
             cap = (
-                f'<p style="margin:8px 0 0;font-size:13px;'
-                f'color:{self.t["caption_color"]};">{html_mod.escape(alt.strip())}</p>'
+                f'<p style="margin:10px 0 0;font-size:13px;'
+                f'color:{self.t["caption_color"]};text-align:center;">'
+                f"▲ {html_mod.escape(alt.strip())}</p>"
             )
         return (
-            '<section style="margin:22px 0;text-align:center;">'
+            '<section style="margin:24px 0;text-align:center;">'
             f'<img src="{src}" alt="{html_mod.escape(alt)}" '
-            'style="max-width:100%;border-radius:8px;display:block;margin:0 auto;">'
+            'style="max-width:100%;border-radius:10px;display:block;margin:0 auto;'
+            'box-shadow:0 4px 16px rgba(0,0,0,0.10);">'
             f"{cap}</section>"
         )
 
@@ -329,23 +360,38 @@ class _Renderer:
         tb = self.t["table_border"]
         ths = "".join(
             f'<th style="border:1px solid {tb};background:{self.t["th_bg"]};'
-            f'padding:8px 12px;color:{self.t["h2_color"]};font-weight:700;'
+            f'padding:9px 12px;color:{self.t["h2_color"]};font-weight:700;'
             f'text-align:left;">{self.inline(c)}</th>'
             for c in header
         )
         trs = ""
-        for row in rows:
+        for ri, row in enumerate(rows):
+            # 斑马纹：偶数行铺浅底色，长表格更易逐行阅读
+            row_bg = f"background:{self.t['th_bg']};" if ri % 2 == 1 else ""
             tds = "".join(
-                f'<td style="border:1px solid {tb};padding:8px 12px;'
+                f'<td style="border:1px solid {tb};padding:9px 12px;{row_bg}'
                 f'color:{self.t["text_color"]};">{self.inline(c)}</td>'
                 for c in row
             )
             trs += f"<tr>{tds}</tr>"
         return (
-            '<section style="margin:18px 0;overflow-x:auto;">'
+            '<section style="margin:20px 0;overflow-x:auto;">'
             f'<table style="border-collapse:collapse;width:100%;font-size:14px;'
             f'line-height:1.7;"><thead><tr>{ths}</tr></thead>'
             f"<tbody>{trs}</tbody></table></section>"
+        )
+
+    def end_mark(self) -> str:
+        """文末收尾装饰：细线 + END 标记（公众号文章通用惯例）。"""
+        return (
+            '<section style="margin:40px 0 8px;text-align:center;">'
+            f'<span style="display:inline-block;width:36px;height:1px;'
+            f'background:{self.t["hr_color"]};vertical-align:middle;"></span>'
+            f'<span style="display:inline-block;margin:0 12px;font-size:12px;'
+            f'letter-spacing:3px;color:{self.t["accent"]};font-weight:700;'
+            f'vertical-align:middle;">END</span>'
+            f'<span style="display:inline-block;width:36px;height:1px;'
+            f'background:{self.t["hr_color"]};vertical-align:middle;"></span></section>'
         )
 
     def footnote_section(self) -> str:
@@ -522,6 +568,8 @@ def markdown_to_wechat_html(md: str, theme: str = "default") -> str:
     flush_all()
     if in_code and code_buf:
         blocks.append(r.code_block(code_buf))
+    # 收尾顺序：正文 → END 标记 → 参考链接（附录性质，放最后）
+    blocks.append(r.end_mark())
     blocks.append(r.footnote_section())
 
     body = "\n".join(b for b in blocks if b)
