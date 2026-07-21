@@ -280,6 +280,9 @@ def search_duckduckgo(query: str, n: int = 8) -> list[dict[str, str]]:
             timeout=40,
         )
         r.raise_for_status()
+        # 响应头缺 charset 时 requests 退到 latin-1，中文标题会乱码
+        if not r.encoding or r.encoding.lower() == "iso-8859-1":
+            r.encoding = r.apparent_encoding or "utf-8"
         text = r.text
         r.close()
         return text

@@ -71,6 +71,9 @@ def _chat_stream(url: str, headers: dict, payload: dict, timeout: int, retries: 
                     if r.status_code >= 400:
                         body = re.sub(r"<[^>]+>", " ", r.text or "")[:200]
                         raise RuntimeError(f"HTTP {r.status_code}: {body.strip()}")
+                    # SSE 响应头常不带 charset，requests 会退到 latin-1 →
+                    # 中文变「ä½ å¥½」式乱码；OpenAI 协议明确是 UTF-8，强制指定
+                    r.encoding = "utf-8"
                     text = parse_sse_content(r.iter_lines(decode_unicode=True))
                 if not text.strip():
                     raise RuntimeError("流式响应为空")
