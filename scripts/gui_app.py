@@ -89,7 +89,10 @@ def pick_port(preferred: int) -> int:
 def start_server(port: int) -> None:
     def _run() -> None:
         try:
-            # 不用 app.run：其启动横幅会做主机名反查，macOS 上可能阻塞数十秒
+            # HTTPServer.server_bind 会调 socket.getfqdn 做 DNS 反查，
+            # 部分环境（如 mac CI runner）反查超时可卡 30-75 秒导致启动失败；
+            # 该值仅用于日志与响应头，补丁掉无功能影响
+            socket.getfqdn = lambda name="": name or "127.0.0.1"
             from werkzeug.serving import make_server
 
             srv = make_server("127.0.0.1", port, gui_server.app, threaded=True)
