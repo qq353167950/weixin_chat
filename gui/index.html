@@ -597,6 +597,17 @@
       <p>四组配置各自独立 · 保存后立即生效（写入 .env）</p>
     </div>
     <div class="card" id="settings-body">加载中…</div>
+    <div class="card">
+      <h3>桌面窗口</h3>
+      <div class="sub">点右上角 X 时的行为（仅桌面客户端生效）</div>
+      <label class="field"><span class="cap">关闭按钮行为</span>
+        <select id="in-close-action">
+          <option value="ask">每次询问</option>
+          <option value="exit">直接退出程序</option>
+          <option value="tray">最小化到系统托盘</option>
+        </select>
+      </label>
+    </div>
     <div class="row" style="justify-content:center">
       <button class="btn lg" id="btn-save-settings">保存全部设置</button>
     </div>
@@ -642,6 +653,23 @@
       <button class="btn secondary" id="confirm-no">取消</button>
       <button class="btn" id="confirm-yes">确认</button>
     </div>
+  </div>
+</div>
+
+<!-- 关窗选择弹层（桌面客户端点 X 时由 gui_app.py 触发） -->
+<div class="mask" id="close-mask">
+  <div class="modal">
+    <h3>关闭窗口</h3>
+    <p>你想直接退出程序，还是最小化到系统托盘继续在后台运行？</p>
+    <label style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:18px;font-size:13px;color:var(--text-2);cursor:pointer">
+      <input type="checkbox" id="close-remember" style="width:auto;accent-color:var(--blue)">
+      记住我的选择，下次不再询问
+    </label>
+    <div class="row">
+      <button class="btn secondary" id="close-tray">最小化到托盘</button>
+      <button class="btn danger" id="close-exit">退出程序</button>
+    </div>
+    <button id="close-cancel" style="margin-top:12px;border:none;background:transparent;cursor:pointer;color:var(--text-3);font-size:13px;font-family:inherit">取消</button>
   </div>
 </div>
 
@@ -1313,6 +1341,8 @@ let SETTINGS_SCHEMA = null;
 async function loadSettings() {
   const { schema, values } = await api("/api/settings");
   SETTINGS_SCHEMA = schema;
+  // 回填关窗行为偏好（独立于 .env）
+  api("/api/close_action").then(r => { $("#in-close-action").value = r.action; }).catch(() => {});
   const box = $("#settings-body");
   box.innerHTML = "";
   schema.forEach(group => {
@@ -1361,6 +1391,8 @@ $("#btn-save-settings").addEventListener("click", async () => {
   });
   try {
     await api("/api/settings", { method: "POST", body: { values }});
+    // 关窗行为偏好单独存（ui_state.json，非 .env）
+    await api("/api/close_action", { method: "POST", body: { action: $("#in-close-action").value }});
     await refreshState();
     toast("设置已保存并生效");
   } catch (e) { toast("失败：" + e.message, 4000); }
@@ -1439,6 +1471,27 @@ async function resumeRunningTasks() {
     return;  // 同时最多恢复一个（正常流程也只会有一个在跑）
   }
 }
+
+/* ============ 关窗选择层（桌面客户端点 X 时由 Python 侧 evaluate_js 调起） ============ */
+window.showCloseDialog = function () {
+  $("#close-remember").checked = false;
+  $("#close-mask").classList.add("show");
+};
+function closeDialogDone(action) {
+  const remember = $("#close-remember").checked;
+  $("#close-mask").classList.remove("show");
+  try { window.pywebview?.api?.close_choice(action, remember); } catch (_) {}
+}
+$("#close-exit").addEventListener("click", async () => {
+  // 有未保存修改先自动保存一把，减少丢稿
+  if (MD_DIRTY) await saveArticle({ silent: true });
+  closeDialogDone("exit");
+});
+$("#close-tray").addEventListener("click", () => closeDialogDone("tray"));
+$("#close-cancel").addEventListener("click", () => $("#close-mask").classList.remove("show"));
+$("#close-mask").addEventListener("click", (e) => {
+  if (e.target === $("#close-mask")) $("#close-mask").classList.remove("show");
+});
 
 /* ============ 版本更新检查 ============ */
 async function loadVersion() {

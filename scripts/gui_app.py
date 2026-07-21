@@ -4,11 +4,11 @@
 实现：
   - 后台线程跑 gui_server 的 Flask 应用（127.0.0.1，端口被占则自动换）
   - pywebview 起原生窗口（Windows 下为 Edge WebView2 内核），加载本地服务
-  - 关闭窗口即退出整个程序（Flask 线程为 daemon）
-  - 未保存确认：前端通过 js_api 桥把脏状态推给 Python 侧变量，
-    关窗事件里只读变量 + 原生 MessageBox —— 严禁在 closing 事件里
-    evaluate_js（UI 线程互等会死锁，表现为关窗卡住）
-  - 窗口化 exe 无控制台，stdout/stderr 重定向到数据目录 app.log
+  - 点 X 首次弹「退出 / 最小化到托盘」选择层（可勾选记住，存 ui_state.json）；
+    最小化走 pystray 托盘图标，托盘菜单可恢复窗口或退出
+  - 未保存/任务运行中退出前有原生确认；closing 事件里严禁 evaluate_js
+    （UI 线程互等死锁），弹选择层由子线程延迟触发
+  - 窗口化 exe 无控制台，stdout/stderr 重定向到数据目录 app.log（2MB 轮转）
   - WebView2 运行时缺失等异常时回退到系统浏览器，功能不受影响
 
 用法：
@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import sys
 import threading
@@ -51,6 +52,45 @@ WINDOW_TITLE = "公众号助手"
 WINDOW_SIZE = (1180, 800)
 MIN_SIZE = (980, 640)
 
+# 关窗行为偏好：ask=每次询问 / exit=直接退出 / tray=最小化到托盘
+_UI_STATE_FILE = app_root() / "ui_state.json"
+
+
+def load_close_action() -> str:
+    try:
+        data = json.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
+        v = str(data.get("close_action", "ask"))
+        return v if v in {"ask", "exit", "tray"} else "ask"
+    except Exception:
+        return "ask"
+
+
+def save_close_action(action: str) -> None:
+    try:
+        data = {}
+        if _UI_STATE_FILE.exists():
+            data = json.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        data["close_action"] = action
+        _UI_STATE_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+class AppState:
+    """窗口/托盘共享状态。"""
+
+    def __init__(self) -> None:
+        self.window = None
+        self.tray = None            # pystray.Icon | None
+        self.quitting = False       # 走真正退出流程（跳过 closing 拦截）
+
+
+APP = AppState()
+
 
 class Bridge:
     """暴露给页面 JS 的桥（window.pywebview.api.*）。"""
@@ -61,6 +101,16 @@ class Bridge:
     def set_dirty(self, value: bool) -> None:
         """前端编辑器脏状态变化时同步过来，供关窗确认使用。"""
         self.dirty = bool(value)
+
+    def close_choice(self, action: str, remember: bool) -> None:
+        """关窗选择层的回调：action = exit / tray。"""
+        action = action if action in {"exit", "tray"} else "exit"
+        if remember:
+            save_close_action(action)
+        if action == "tray":
+            minimize_to_tray()
+        else:
+            request_quit()
 
 
 def confirm_native(text: str) -> bool:
@@ -78,6 +128,101 @@ def confirm_native(text: str) -> bool:
         )
     except Exception:
         return True  # 非 Windows 或调用失败：不阻塞退出
+
+
+def _tray_image():
+    """托盘图标：蓝底「稿」字（与应用图标一致）。"""
+    from PIL import Image, ImageDraw, ImageFont
+
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=14, fill=(0, 113, 227, 255))
+    try:
+        font = ImageFont.truetype(r"C:\Windows\Fonts\msyhbd.ttc", 38)
+        bbox = d.textbbox((0, 0), "稿", font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        d.text(((size - w) / 2 - bbox[0], (size - h) / 2 - bbox[1]), "稿",
+               font=font, fill=(255, 255, 255, 255))
+    except Exception:
+        pass
+    return img
+
+
+def show_window() -> None:
+    if APP.window is not None:
+        try:
+            APP.window.show()
+            APP.window.restore()
+        except Exception:
+            pass
+    stop_tray()
+
+
+def stop_tray() -> None:
+    if APP.tray is not None:
+        try:
+            APP.tray.stop()
+        except Exception:
+            pass
+        APP.tray = None
+
+
+def minimize_to_tray() -> None:
+    """隐藏窗口并挂托盘图标（pystray 跑独立线程）。"""
+    if APP.window is None:
+        return
+    try:
+        APP.window.hide()
+    except Exception:
+        return
+    if APP.tray is not None:
+        return
+    try:
+        import pystray
+
+        menu = pystray.Menu(
+            pystray.MenuItem("打开 公众号助手", lambda: show_window(), default=True),
+            pystray.MenuItem("退出", lambda: request_quit()),
+        )
+        APP.tray = pystray.Icon("weixin_chat", _tray_image(), WINDOW_TITLE, menu)
+        threading.Thread(target=APP.tray.run, daemon=True).start()
+    except Exception as e:
+        # 托盘不可用（如缺依赖）：恢复窗口，退化为普通关闭询问
+        print(f"[提示] 托盘不可用（{e}），已恢复窗口")
+        try:
+            APP.window.show()
+        except Exception:
+            pass
+
+
+def request_quit() -> None:
+    """真正退出：置标志后销毁窗口（closing 拦截会放行）。"""
+    APP.quitting = True
+    stop_tray()
+    if APP.window is not None:
+        try:
+            APP.window.show()      # destroy 需要窗口存在于前台线程
+        except Exception:
+            pass
+        try:
+            APP.window.destroy()
+        except Exception:
+            import os
+
+            os._exit(0)
+
+
+def _show_close_dialog() -> None:
+    """子线程里调 evaluate_js 弹页面内选择层（不能在 closing 事件里做）。"""
+    if APP.window is None:
+        return
+    try:
+        APP.window.evaluate_js("window.showCloseDialog && window.showCloseDialog()")
+    except Exception:
+        # 页面未就绪等异常：退化为直接退出确认
+        if confirm_native("确定退出程序吗？"):
+            request_quit()
 
 
 # 实例锁：最多允许 2 个实例同时运行
@@ -198,17 +343,32 @@ def main() -> int:
             min_size=MIN_SIZE,
             background_color="#f5f5f7",   # 与页面底色一致，加载时不闪白
         )
+        APP.window = window
 
         def on_closing():
             # 只读 Python 侧状态，绝不在此调 evaluate_js（会死锁）
+            if APP.quitting:
+                return True    # request_quit 发起的销毁，放行
+
+            action = load_close_action()
+            if action == "tray":
+                threading.Timer(0.05, minimize_to_tray).start()
+                return False   # 拦下关闭，转为隐藏
+
+            # exit / ask 共同的退出前保护
             running = gui_server._running_task()
             if running:
                 return confirm_native(
                     f"「{running['name']}」仍在进行中，关闭会中断它。确定退出吗？"
                 )
-            if bridge.dirty:
-                return confirm_native("文章有未保存的修改，确定退出吗？")
-            return True
+            if action == "exit":
+                if bridge.dirty:
+                    return confirm_native("文章有未保存的修改，确定退出吗？")
+                return True
+
+            # ask：拦下本次关闭，弹页面内选择层（勾选可记住）
+            threading.Timer(0.05, _show_close_dialog).start()
+            return False
 
         window.events.closing += on_closing
         webview.start()

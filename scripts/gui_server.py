@@ -949,6 +949,31 @@ SETTINGS_SCHEMA = [
 ]
 
 
+@app.get("/api/close_action")
+def api_close_action_get():
+    """桌面端点 X 行为偏好（存 ui_state.json，非 .env）。"""
+    try:
+        import gui_app
+
+        return jsonify({"action": gui_app.load_close_action()})
+    except Exception:
+        return jsonify({"action": "ask"})
+
+
+@app.post("/api/close_action")
+def api_close_action_set():
+    action = str((request.get_json(force=True) or {}).get("action") or "ask")
+    if action not in {"ask", "exit", "tray"}:
+        return jsonify({"error": "无效选项"}), 400
+    try:
+        import gui_app
+
+        gui_app.save_close_action(action)
+        return jsonify({"ok": True, "action": action})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.get("/api/settings")
 def api_settings_get():
     values = read_env_values(ROOT / ".env")
