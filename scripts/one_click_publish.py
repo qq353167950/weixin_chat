@@ -81,6 +81,10 @@ def main() -> int:
         return 1
 
     md_text = md_path.read_text(encoding="utf-8")
+    # LLM 产出偶尔整篇包在 ```markdown 围栏里，先剥再提取标题/摘要
+    from markdown_to_wechat_html import _strip_outer_fence
+
+    md_text = _strip_outer_fence(md_text)
     auto_title, body_md = extract_title_and_body(md_text)
     title = (args.title or auto_title or "").strip()
     if not title:

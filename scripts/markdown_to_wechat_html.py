@@ -183,13 +183,16 @@ class _Renderer:
         return self._SAFE_SPAN_RE.sub(_repl, text)
 
     def inline(self, text: str) -> str:
-        """转义 + 行内 Markdown。顺序：转义 → 白名单 span 还原 → 行内代码保护 → 图片 → 链接 → 粗斜删。"""
+        """转义 + 行内 Markdown。
+
+        顺序（每步的位置都有讲究）：
+          转义 → 行内代码保护（先于 span 还原：代码里演示的 span 要保持原文）
+          → 白名单 span 还原 → 链接/图片保护（先于盘古：URL 含中文不能被插空格）
+          → 盘古之白 → 链接/图片渲染 → 粗斜删 → 放回代码
+        """
         text = html_mod.escape(text, quote=False)
 
-        # 编辑器字体/字号/颜色 span（其他任何 HTML 保持转义原样显示）
-        text = self._restore_safe_spans(text)
-
-        # 行内代码先抠出来保护，避免内部 * _ 被再处理
+        # 1) 行内代码最先抠出：代码内容不参与任何后续处理
         code_slots: list[str] = []
 
         def _stash_code(m: re.Match) -> str:
@@ -198,8 +201,24 @@ class _Renderer:
 
         text = re.sub(r"`([^`]+)`", _stash_code, text)
 
-        # 盘古之白：中英文之间加空隙（行内代码已被占位符保护，不受影响）
+        # 2) 编辑器字体/字号/颜色 span（其他任何 HTML 保持转义原样显示）
+        text = self._restore_safe_spans(text)
+
+        # 3) 链接/图片整体抠出保护：URL 含中文时盘古会插空格打断链接
+        link_slots: list[str] = []
+
+        def _stash_link(m: re.Match) -> str:
+            link_slots.append(m.group(0))
+            return f"\x00LINK{len(link_slots) - 1}\x00"
+
+        text = re.sub(r'!?\[[^\]]*\]\([^)]+\)', _stash_link, text)
+
+        # 4) 盘古之白：中英文之间加空隙（代码/链接已被占位符保护）
         text = _pangu(text)
+
+        # 5) 放回链接/图片原文再渲染
+        for idx, raw in enumerate(link_slots):
+            text = text.replace(f"\x00LINK{idx}\x00", raw)
 
         # 行内图片（罕见，正文图片通常独占一行）
         text = re.sub(
@@ -641,6 +660,7 @@ def extract_title_and_body(md: str) -> tuple[str, str]:
 def make_digest(md_body: str, limit: int = 54) -> str:
     """从正文 Markdown 生成干净摘要（草稿 digest 字段，上限 120 字）。"""
     text = re.sub(r"```.*?```", " ", md_body, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)   # 剥 HTML 标签（编辑器 span 等），防残缺片段进摘要
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"[#>*`~|_]", " ", text)

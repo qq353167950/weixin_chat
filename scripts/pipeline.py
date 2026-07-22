@@ -171,7 +171,8 @@ def step_select_topic(work_dir: Path) -> dict:
             os.getenv("SEARCH_DOMAIN", "").strip() or "公众号 个人成长 职场 副业",
         )
         extra = ask("额外搜索词（可空，例如：AI副业 裁员）", "")
-        want_n = int(ask("希望给出几个候选选题", os.getenv("TOPIC_CANDIDATE_N", "5") or "5") or "5")
+        raw_n = ask("希望给出几个候选选题", os.getenv("TOPIC_CANDIDATE_N", "5") or "5")
+        want_n = int(raw_n) if raw_n.strip().isdigit() else 5   # 非数字回退默认，防崩溃
         want_n = max(3, min(want_n, 10))
 
         print()
@@ -185,7 +186,13 @@ def step_select_topic(work_dir: Path) -> dict:
             print("  SEARCH_PROVIDER=bocha  + BOCHA_API_KEY=...")
             print("  SEARCH_PROVIDER=duckduckgo  （免费，无需 Key）")
             if yes_no("改成自己输入主题？", True):
-                continue
+                title = ask("请输入你的主题/标题方向")
+                if title.strip():
+                    return {
+                        "title": title, "type": ask("文章类型", "干货文"),
+                        "angle": ask("角度（可空）", ""), "why": "用户自定义",
+                        "audience": "", "refs": "",
+                    }
             continue
 
         (work_dir / "search_raw.json").write_text(
@@ -209,7 +216,13 @@ def step_select_topic(work_dir: Path) -> dict:
             print(f"[大模型整理选题失败] {e}")
             print("请检查 .env 的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（写作专用，与生图无关）")
             if yes_no("改为自己输入主题？", True):
-                continue
+                title = ask("请输入你的主题/标题方向")
+                if title.strip():
+                    return {
+                        "title": title, "type": ask("文章类型", "干货文"),
+                        "angle": ask("角度（可空）", ""), "why": "用户自定义",
+                        "audience": "", "refs": "",
+                    }
             continue
 
         if not topics:

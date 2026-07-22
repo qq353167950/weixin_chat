@@ -902,7 +902,7 @@ async function api(path, opts = {}) {
 /* 全局忙碌门控：有后台任务时禁用所有「启动类」按钮，防误触发 409 */
 const BUSY_BTNS = ["btn-search", "btn-custom", "btn-write", "btn-rewrite",
                    "btn-illustrate", "btn-cover-ai", "btn-cover-template", "btn-publish",
-                   "btn-deai"];
+                   "btn-deai", "btn-save-md", "btn-export-md"];
 let BUSY = false;
 function setBusy(v) {
   BUSY = v;
@@ -1178,17 +1178,19 @@ function renderTopics(topics) {
     div.appendChild(title);
     div.appendChild(meta);
     div.addEventListener("click", async () => {
-      $$(".topic-card").forEach(c => c.classList.remove("selected"));
-      div.classList.add("selected");
-      const rs = await api("/api/topics/select", { method: "POST", body: t });
-      await refreshState();
-      if (rs.new_run) {
-        resetUiForRun();
-        // 切换选题场景：候选列表和下一步按钮要保留
-        $("#topics-card").style.display = "";
-        toast("已切换新选题，旧文章已存入历史");
-      }
-      $("#btn-goto-article").disabled = false;
+      try {
+        const rs = await api("/api/topics/select", { method: "POST", body: t });
+        $$(".topic-card").forEach(c => c.classList.remove("selected"));
+        div.classList.add("selected");
+        await refreshState();
+        if (rs.new_run) {
+          resetUiForRun();
+          // 切换选题场景：候选列表和下一步按钮要保留
+          $("#topics-card").style.display = "";
+          toast("已切换新选题，旧文章已存入历史");
+        }
+        $("#btn-goto-article").disabled = false;
+      } catch (e) { toast("选定失败：" + e.message, 4000); }
     });
     list.appendChild(div);
   });
@@ -1198,13 +1200,15 @@ function renderTopics(topics) {
 $("#btn-custom").addEventListener("click", async () => {
   const title = $("#in-custom-title").value.trim();
   if (!title) return toast("请先填主题");
-  const rs = await api("/api/topics/select", { method: "POST", body: {
-    title, angle: $("#in-custom-angle").value, type: $("#in-custom-type").value,
-  }});
-  await refreshState();
-  if (rs.new_run) { resetUiForRun(); toast("已切换新选题，旧文章已存入历史"); }
-  else toast("已选定主题");
-  nav("article");
+  try {
+    const rs = await api("/api/topics/select", { method: "POST", body: {
+      title, angle: $("#in-custom-angle").value, type: $("#in-custom-type").value,
+    }});
+    await refreshState();
+    if (rs.new_run) { resetUiForRun(); toast("已切换新选题，旧文章已存入历史"); }
+    else toast("已选定主题");
+    nav("article");
+  } catch (e) { toast("选定失败：" + e.message, 4000); }
 });
 $("#btn-goto-article").addEventListener("click", () => nav("article"));
 
@@ -1498,11 +1502,12 @@ $("#md-editor").addEventListener("keydown", (e) => {
   else if (k === "i") { e.preventDefault(); edSurround("*", "*"); }
 });
 
-/* Ctrl+S / Cmd+S 保存文章（拦截浏览器保存网页） */
+/* Ctrl+S / Cmd+S 保存文章（拦截浏览器保存网页）；后台任务写文件期间禁止保存防覆盖 */
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     if ($("#page-article").classList.contains("show") && $("#editor-card").style.display !== "none") {
       e.preventDefault();
+      if (BUSY) { toast("后台任务进行中，稍后再保存（防止互相覆盖）"); return; }
       saveArticle();
     }
   }
@@ -1919,6 +1924,8 @@ const TASK_RESUME = {
                  done: async () => { await loadArticle(); } },
   "生成配图":  { log: "log-article", page: "article",
                  done: async () => { await loadArticle(); } },
+  "去除AI味":  { log: "log-article", page: "article",
+                 done: async () => { await loadArticle(); } },
   "生成封面":  { log: "log-cover",   page: "cover",  done: async () => {} },
   "上传草稿箱": { log: "log-publish", page: "publish", done: async () => {} },
 };
@@ -2001,7 +2008,7 @@ function showUpdateDialog(info) {
     // Windows 安装包走内置更新；其他平台/绿色版回退浏览器下载
     const isSetup = /setup.*\.exe$/i.test(info.download_url || "");
     if (!isSetup) {
-      if (info.download_url) window.open(info.download_url, "_blank");
+      if (info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.download_url } }).catch(() => window.open(info.download_url, "_blank")); }
       $("#update-mask").classList.remove("show");
       return;
     }
@@ -2028,7 +2035,7 @@ function showUpdateDialog(info) {
       $("#up-progress").style.display = "none";
       $("#up-actions").style.display = "";
       toast("更新失败：" + e.message + "，可到 GitHub 手动下载", 5000);
-      if (info.download_url) window.open(info.download_url, "_blank");
+      if (info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.download_url } }).catch(() => window.open(info.download_url, "_blank")); }
     }
   };
 }

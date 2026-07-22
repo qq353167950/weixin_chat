@@ -294,15 +294,30 @@ def detect_ai_phrases(md_text: str) -> list[str]:
 
 # 引用角标链接：[[1]](url) / [1](url)，公众号里点不了还破坏阅读
 _CITE_LINK_RE = re.compile(r"\[\[?\d+\]?\]\(https?://[^)]+\)")
-_BARE_CITE_RE = re.compile(r"(?<!\[)\[\d{1,2}\](?!\()")
+# 裸角标 [1]：排除紧跟在 ASCII 标识符/右括号后的情况（arr[1]、lst[0] 是代码下标；
+# 注意不能用 \w——它匹配中文，会把「如图[1]」这类真角标也保护掉）
+_BARE_CITE_RE = re.compile(r"(?<![A-Za-z0-9_\]\[])\[\d{1,2}\](?!\()")
 
 
 def scrub_citations(md_text: str) -> str:
-    """删除正文里的引用角标（模型偶尔不听话时兜底），保持句子通顺。"""
-    text = _CITE_LINK_RE.sub("", md_text)
+    """删除正文里的引用角标（模型偶尔不听话时兜底），保持句子通顺。
+
+    代码块与行内代码先抠出保护：`arr[1]` 这类数组下标不能被当角标删掉。
+    """
+    slots: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        slots.append(m.group(0))
+        return f"\x00CODE{len(slots) - 1}\x00"
+
+    text = re.sub(r"```.*?```", _stash, md_text, flags=re.S)   # 围栏代码块
+    text = re.sub(r"`[^`\n]+`", _stash, text)                   # 行内代码
+    text = _CITE_LINK_RE.sub("", text)
     text = _BARE_CITE_RE.sub("", text)
     # 角标删掉后标点前可能剩空格
     text = re.sub(r"[ \t]+([，。；！？、）])", r"\1", text)
+    for idx, code in enumerate(slots):
+        text = text.replace(f"\x00CODE{idx}\x00", code)
     return text
 
 

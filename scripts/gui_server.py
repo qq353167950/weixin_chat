@@ -258,7 +258,10 @@ def _ensure_run() -> Path:
     """确保存在本次产出目录（与命令行 pipeline 的 runs/<stamp> 一致）。
 
     同一秒内连续开新 run 时时间戳会撞名，追加序号避免落回旧目录。
+    注意：_prune_runs 内部会抢 _LOCK（读 work_dir），必须在锁外调用，
+    否则不可重入锁直接死锁（v1.6.2 曾因此让「搜索选题」全线卡死）。
     """
+    created = False
     with _LOCK:
         if STATE["work_dir"] is None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -269,8 +272,11 @@ def _ensure_run() -> Path:
                 wd = ROOT / "runs" / f"{stamp}-{n}"
             wd.mkdir(parents=True, exist_ok=True)
             STATE["work_dir"] = wd
-            _prune_runs()
-        return STATE["work_dir"]
+            created = True
+        result = STATE["work_dir"]
+    if created:
+        _prune_runs()   # 锁外：内部自行短暂取锁读当前目录
+    return result
 
 
 def _article_path() -> Path | None:
@@ -460,7 +466,12 @@ def api_update_download():
         try:
             dest = ROOT / "update"
             dest.mkdir(parents=True, exist_ok=True)
-            fname = dest / url.rsplit("/", 1)[-1]
+            # URL 解码后净化文件名：百分号序列进 bat 会被 cmd 当变量展开导致安装失败
+            from urllib.parse import unquote
+
+            raw_name = unquote(url.rsplit("/", 1)[-1])
+            safe_name = re.sub(r'[\\/:*?"<>|%]', "_", raw_name) or "update-setup.exe"
+            fname = dest / safe_name
             req = _ur.Request(url, headers={"User-Agent": "weixin-chat-updater"})
             with _ur.urlopen(req, timeout=30) as resp, open(fname, "wb") as f:
                 total = int(resp.headers.get("Content-Length") or 0)
