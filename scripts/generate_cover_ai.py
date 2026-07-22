@@ -68,7 +68,7 @@ def extract_abstract(md_path: Path, limit: int = 120) -> str:
 
 
 def build_prompt(title: str, abstract: str = "", style: str = "editorial") -> str:
-    """Prompt for BACKGROUND only. No Chinese characters in the image."""
+    """通用后备提示词：AI 主题提示词不可用时才用（尽量贴近标题，不再禁止文字）。"""
     styles = {
         "editorial": "modern editorial magazine cover illustration, clean composition, soft cinematic lighting",
         "tech": "futuristic tech illustration, deep blue purple gradient, subtle data particles, clean modern",
@@ -82,13 +82,39 @@ def build_prompt(title: str, abstract: str = "", style: str = "editorial") -> st
         topic = f"{title}. Context: {abstract}"
 
     prompt = (
-        f"Create a horizontal WeChat public-account cover BACKGROUND image. "
+        f"Create a horizontal WeChat public-account cover image. "
         f"Theme: {topic}. "
         f"Style: {style_text}. "
-        f"Wide cinematic 2.35:1 composition, leave some clean dark/soft area for later title overlay, "
-        f"high quality, sharp, no watermark, no logo, "
-        f"NO text, NO letters, NO Chinese characters, NO words, NO numbers, NO UI mockups."
+        f"Wide cinematic 2.35:1 composition, "
+        f"high quality, sharp, no watermark, no logo."
     )
+    return prompt[:1800]
+
+
+def llm_cover_prompt(title: str, content: str) -> str:
+    """让写作模型读文章主题，产出一条贴合本文的英文封面生图提示词。
+
+    不固定风格：色调、意象、构图由模型按文章调性自行决定；允许画面带文字。
+    失败时抛异常，由 generate_ai_cover 退回 build_prompt。
+    """
+    from llm_client import llm_chat
+
+    system = (
+        "You are the art director for a Chinese WeChat article cover. "
+        "Read the article, understand its theme and mood, then write ONE vivid "
+        "English image-generation prompt for a horizontal 2.35:1 cover image that "
+        "fits THIS specific article. Decide the imagery, color palette, lighting and "
+        "composition yourself from the content — do NOT fall back on a fixed template "
+        "style. The image MAY include a short headline or words if it suits the design. "
+        "Output only the prompt text, no explanation, under 120 English words."
+    )
+    user = f"Title: {title}\n\nArticle excerpt:\n{content[:2000]}"
+    prompt = llm_chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.8,
+    ).strip()
+    if not prompt:
+        raise RuntimeError("AI 返回空提示词")
     return prompt[:1800]
 
 
@@ -321,11 +347,16 @@ def generate_ai_cover(
     out_path: Path,
     *,
     abstract: str = "",
+    content: str = "",
     provider: str = "",
     style: str = "editorial",
     overlay: bool = True,
 ) -> Path:
-    """AI 生图封面。IMAGE_FALLBACK_TEMPLATE=1（默认）时生图失败自动退回文字模板。"""
+    """AI 生图封面。IMAGE_FALLBACK_TEMPLATE=1（默认）时生图失败自动退回文字模板。
+
+    提示词优先由写作模型读文章主题定制（content 传正文时）；无正文或生成失败
+    再退回通用模板提示词 build_prompt。
+    """
     from task_hooks import check_cancelled, report_progress
 
     # IMAGE_PROVIDER 为主；兼容旧名 COVER_PROVIDER
@@ -339,7 +370,18 @@ def generate_ai_cover(
     if provider in {"template", "local", "pil"}:
         return template_generate_cover(title, out_path, theme="default")
 
-    prompt = build_prompt(title, abstract=abstract, style=style)
+    # 先让写作模型总结文章主题，产出贴合本文的提示词；失败再退回通用提示词
+    prompt = ""
+    source = content.strip() or abstract.strip()
+    if source:
+        try:
+            report_progress("正在总结文章主题、生成封面提示词…")
+            prompt = llm_cover_prompt(title, source)
+            print(f"[封面] AI 按文章主题定制提示词：{prompt[:120]}…")
+        except Exception as e:
+            print(f"[封面] 定制提示词失败（{e}），改用通用提示词")
+    if not prompt:
+        prompt = build_prompt(title, abstract=abstract, style=style)
     print(f"[prompt] {prompt[:200]}...")
     check_cancelled()
     try:
@@ -384,6 +426,7 @@ def main() -> int:
 
     title = (args.title or "").strip()
     abstract = ""
+    content = ""
     if args.md:
         md_path = Path(args.md)
         if not md_path.exists():
@@ -392,6 +435,7 @@ def main() -> int:
         if not title:
             title = extract_title_from_md(md_path)
         abstract = extract_abstract(md_path)
+        content = extract_abstract(md_path, limit=2000)  # 传更多正文给 AI 总结主题
     if not title:
         print("[ERROR] need --title or --md")
         return 1
@@ -401,6 +445,7 @@ def main() -> int:
             title,
             Path(args.out),
             abstract=abstract,
+            content=content,
             provider=args.provider,
             style=args.style
             or os.getenv("IMAGE_STYLE", "")

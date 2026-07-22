@@ -967,7 +967,7 @@ def api_cover_generate():
     use_template = bool(body.get("template"))
 
     def job(log):
-        title, _ = extract_title_and_body(md.read_text(encoding="utf-8"))
+        title, body = extract_title_and_body(md.read_text(encoding="utf-8"))
         out = wd / "cover.jpg"
         if use_template:
             log("使用本地文字模板封面（不调生图 API）")
@@ -976,12 +976,12 @@ def api_cover_generate():
             provider = (
                 os.getenv("IMAGE_PROVIDER", "") or os.getenv("COVER_PROVIDER", "openai")
             ).strip()
-            log(f"生图 provider={provider} style={style}，可能需要几十秒…")
+            log(f"生图 provider={provider}，先总结文章主题再定制提示词，可能需要几十秒…")
             overlay = os.getenv(
                 "IMAGE_OVERLAY_TITLE", os.getenv("COVER_OVERLAY_TITLE", "1")
             ) != "0"
             generate_ai_cover(
-                title, out, abstract="", provider=provider, style=style, overlay=overlay
+                title, out, content=body, provider=provider, style=style, overlay=overlay
             )
         log("封面已生成")
         return {"cover": True}

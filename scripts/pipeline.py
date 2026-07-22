@@ -465,7 +465,7 @@ def step_cover(md_path: Path, work_dir: Path) -> Path:
     print("步骤 3/4  生成封面（生图模型）")
     print("-" * 56)
     cover_path = work_dir / "cover.jpg"
-    title, _ = extract_title_and_body(md_path.read_text(encoding="utf-8"))
+    title, cover_body = extract_title_and_body(md_path.read_text(encoding="utf-8"))
 
     def _show_cover() -> None:
         """尽力用系统默认看图工具打开封面，方便直接确认效果。"""
@@ -488,11 +488,8 @@ def step_cover(md_path: Path, work_dir: Path) -> Path:
             provider = (
                 os.getenv("IMAGE_PROVIDER", "") or os.getenv("COVER_PROVIDER", "openai")
             ).strip() or "openai"
-            style = (
-                os.getenv("IMAGE_STYLE", "") or os.getenv("COVER_STYLE", "editorial")
-            ).strip() or "editorial"
-            print(f"将使用【生图】IMAGE_PROVIDER={provider}，风格={style}")
-            print("（不会使用 LLM_* 写作密钥）")
+            print(f"将使用【生图】IMAGE_PROVIDER={provider}")
+            print("（先用写作模型总结文章主题定制提示词，再交给生图模型出图）")
             print("正在生图，可能需要几十秒…")
             try:
                 overlay_flag = os.getenv(
@@ -501,9 +498,8 @@ def step_cover(md_path: Path, work_dir: Path) -> Path:
                 generate_ai_cover(
                     title,
                     cover_path,
-                    abstract="",
+                    content=cover_body,
                     provider=provider,
-                    style=style,
                     overlay=overlay_flag != "0",
                 )
                 print(f"[已生成封面] {cover_path}")
