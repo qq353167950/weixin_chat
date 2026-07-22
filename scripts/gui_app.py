@@ -372,7 +372,12 @@ def main() -> int:
             return False
 
         window.events.closing += on_closing
-        webview.start()
+        # private_mode=False：让 localStorage 持久化（输入历史/引导标记依赖），
+        # storage_path 指到数据目录，卸载程序即随目录清理
+        webview.start(
+            private_mode=False,
+            storage_path=str(app_root() / "webview_data"),
+        )
         return 0
     except Exception as e:
         # WebView2 运行时缺失等场景：回退浏览器，程序保持可用

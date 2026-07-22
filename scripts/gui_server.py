@@ -205,9 +205,12 @@ def _run_task(name: str, fn) -> dict:
 
 
 def _prune_runs(keep: int | None = None) -> None:
-    """按时间戳目录名清理 runs/，保留最近 keep 次产出（含当前）。
+    """按目录名清理 runs/，保留最近 keep 次产出。RUNS_KEEP=0 不清理。
 
-    RUNS_KEEP=0 表示不清理。删除失败静默跳过（文件可能被占用）。
+    保护规则（防误删正在编辑的内容）：
+      - 当前实例的 work_dir 永不删
+      - 目录内 .inuse 心跳 10 分钟内的不删（另一实例可能正在编辑）
+      - 24 小时内修改过的目录不删
     """
     if keep is None:
         keep = int(os.getenv("RUNS_KEEP", "10") or 10)
@@ -216,6 +219,11 @@ def _prune_runs(keep: int | None = None) -> None:
     runs_dir = ROOT / "runs"
     if not runs_dir.exists():
         return
+    with _LOCK:
+        current = Path(STATE["work_dir"]).resolve() if STATE["work_dir"] else None
+    import time as _time
+
+    now = _time.time()
     dirs = sorted(
         (d for d in runs_dir.iterdir() if d.is_dir()),
         key=lambda d: d.name,
@@ -223,7 +231,25 @@ def _prune_runs(keep: int | None = None) -> None:
     )
     for old in dirs[keep:]:
         try:
+            if current and old.resolve() == current:
+                continue
+            inuse = old / ".inuse"
+            if inuse.exists() and now - inuse.stat().st_mtime < 600:
+                continue
+            if now - old.stat().st_mtime < 86400:
+                continue
             shutil.rmtree(old)
+        except OSError:
+            pass
+
+
+def _touch_inuse() -> None:
+    """标记当前 work_dir 正在使用（跨实例的清理保护心跳）。"""
+    with _LOCK:
+        wd = STATE["work_dir"]
+    if wd:
+        try:
+            (Path(wd) / ".inuse").write_text("", encoding="utf-8")
         except OSError:
             pass
 
@@ -606,6 +632,7 @@ def api_runs_open():
         STATE.update(
             {"work_dir": wd, "topics": topics, "topic": topic, "publish": None}
         )
+    _touch_inuse()   # 打开旧目录即打心跳，防另一实例清理误删
     return api_state()
 
 
@@ -772,6 +799,7 @@ def api_article_save():
         return jsonify({"error": "内容为空"}), 400
     wd = _ensure_run()
     (wd / "article.md").write_text(md_text, encoding="utf-8")
+    _touch_inuse()   # 心跳：保护本目录不被另一实例的清理误删
     return jsonify({"ok": True, "ai_hits": detect_ai_phrases(md_text)})
 
 
@@ -952,6 +980,8 @@ def api_render_text():
     """把请求体里的 Markdown 直接渲染为微信排版 HTML（编辑器实时预览用，不落盘）。"""
     body = request.get_json(force=True) or {}
     md_text = str(body.get("md") or "")
+    if len(md_text) > 200_000:
+        return jsonify({"error": "文章过长，实时预览已暂停（不影响保存与发布）"}), 413
     theme = str(body.get("theme") or STATE["theme"])
     if theme not in THEMES:
         theme = "default"
@@ -1052,11 +1082,17 @@ def api_publish():
 # ---------------- 任务轮询 ----------------
 @app.get("/api/task/<tid>")
 def api_task(tid: str):
+    """任务状态。?since=N 时 log 只回第 N 行之后的增量（长任务省流）。"""
+    since = request.args.get("since", type=int)
     with _LOCK:
         task = TASKS.get(tid)
         if not task:
             return jsonify({"error": "任务不存在"}), 404
-        return jsonify(_task_view(task))
+        view = _task_view(task)
+        if since is not None and since >= 0:
+            view["log"] = task["log"][since:]
+            view["log_base"] = min(since, len(task["log"]))
+        return jsonify(view)
 
 
 @app.post("/api/task/<tid>/cancel")

@@ -7,6 +7,7 @@
 <style>
   /* ============ 苹果式设计基座 ============ */
   :root {
+    color-scheme: light;   /* 强制原生控件/滚动条/下拉走浅色，避免系统暗色混搭 */
     --bg: #f5f5f7;
     --card: rgba(255,255,255,0.78);
     --card-solid: #ffffff;
@@ -54,6 +55,7 @@
     padding: 6px 14px; border-radius: 980px; font-size: 13px; color: var(--text-2);
     cursor: pointer; transition: all .2s; border: none; background: transparent;
     display: flex; align-items: center; gap: 6px; font-family: inherit;
+    flex: none; white-space: nowrap;   /* 窄窗口不允许文字内部换行 */
   }
   .nav-step:hover { background: rgba(0,0,0,0.05); }
   .nav-step.active { background: var(--text); color: #fff; }
@@ -73,8 +75,15 @@
     font-size: 12px; color: var(--text-2); cursor: pointer;
     padding: 6px 12px; border-radius: 980px; border: none; background: transparent;
     font-family: inherit; display: flex; align-items: center;
+    flex: none; white-space: nowrap;
   }
   .env-pill:hover { background: rgba(0,0,0,0.05); }
+  /* 窄窗口压缩导航间距，防止溢出 */
+  @media (max-width: 1080px) {
+    .navbar-inner { gap: 8px; padding: 0 14px; }
+    .nav-step { padding: 6px 10px; }
+    .env-pill { padding: 6px 8px; }
+  }
 
   /* ============ 主体布局 ============ */
   .main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
@@ -115,6 +124,7 @@
   .btn.ghost { background: transparent; color: var(--blue); padding: 10px 14px; }
   .btn.ghost:hover { background: rgba(0,113,227,0.08); }
   .btn.danger { background: var(--red); }
+  .btn.warn { background: var(--orange); }   /* 修复类操作：醒目但非破坏性 */
   .btn.lg { font-size: 16px; padding: 14px 32px; }
 
   input[type=text], input[type=password], input[type=number], textarea, select {
@@ -173,22 +183,24 @@
   .console.show { display: block; }
   .console .copy-log-btn {
     position: sticky; top: 0; float: right; margin-left: 8px;
-    border: none; background: rgba(255,255,255,0.12); color: #e8e8ed;
+    border: none; background: #3a3a3c; color: #e8e8ed;   /* 实底：滚动时文字不透出 */
     font-family: inherit; font-size: 11px; padding: 3px 10px;
-    border-radius: 980px; cursor: pointer; opacity: .7;
+    border-radius: 980px; cursor: pointer; opacity: .85;
   }
-  .console .copy-log-btn:hover { opacity: 1; background: rgba(255,255,255,0.2); }
+  .console .copy-log-btn:hover { opacity: 1; background: #48484a; }
   .console .err { color: #ff6961; }
   .console .okline { color: #6fdd8b; }
 
   /* ============ 预览手机壳 ============ */
-  .phone-wrap { display: flex; justify-content: center; }
+  .phone-wrap { display: flex; justify-content: center; align-items: flex-start; }
   .phone {
     width: 390px; max-width: 100%; background: #000; border-radius: 44px;
     padding: 10px; box-shadow: 0 12px 48px rgba(0,0,0,0.22);
   }
   .phone .screen {
-    background: #fff; border-radius: 36px; overflow: hidden; height: 700px; position: relative;
+    background: #fff; border-radius: 36px; overflow: hidden; position: relative;
+    /* 小窗口自适应：640px 高的最小窗口也能看到大部分屏幕 */
+    height: clamp(420px, calc(100vh - 240px), 700px);
   }
   .phone iframe { width: 100%; height: 100%; border: none; }
   .phone .notch {
@@ -239,9 +251,10 @@
   #toast {
     position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px);
     background: rgba(29,29,31,0.92); color: #fff; font-size: 14px;
-    padding: 12px 24px; border-radius: 980px; opacity: 0; pointer-events: none;
-    transition: all .3s; z-index: 200; backdrop-filter: blur(10px);
+    padding: 12px 24px; border-radius: 16px; opacity: 0; pointer-events: none;
+    transition: all .3s; z-index: 500; backdrop-filter: blur(10px);
     max-width: 80vw; cursor: pointer;
+    overflow-wrap: anywhere; word-break: break-word;   /* 长 URL/ID 不撑破 */
   }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 
@@ -262,6 +275,10 @@
   }
   .muted { color: var(--text-2); font-size: 13px; }
   .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  /* 统一空状态提示样式 */
+  .empty-hint {
+    color: var(--text-3); font-size: 13px; text-align: center; padding: 32px 20px;
+  }
 
   /* ============ 弹层（确认框 / 排版预览） ============ */
   .mask {
@@ -316,7 +333,8 @@
   .editor-split {
     display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch;
   }
-  @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
+  /* 断点高于最小窗口宽 980px：避免滚动条出没导致双/单栏跳变 */
+  @media (max-width: 1080px) { .editor-split { grid-template-columns: 1fr; } }
   .editor-split textarea { height: 560px; resize: vertical; }
   .live-wrap {
     border: 1px solid var(--hairline); border-radius: var(--radius-m);
@@ -327,8 +345,9 @@
     padding: 8px 14px; font-size: 12px; color: var(--text-2);
     background: rgba(0,0,0,0.03); border-bottom: 1px solid var(--hairline); flex: none;
   }
+  /* 跟随左栏拉伸（用户拖大 textarea 时同步），不再固定 max-height */
   .live-preview {
-    flex: 1; overflow-y: auto; padding: 16px 18px; min-height: 0; max-height: 560px;
+    flex: 1; overflow-y: auto; padding: 16px 18px; min-height: 0;
   }
   .theme-seg.mini { padding: 2px; }
   .theme-seg.mini button { padding: 3px 10px; font-size: 12px; }
@@ -442,9 +461,9 @@
   }
   #btn-welcome-skip:hover { color: var(--text-2); }
 
-  /* 设置页必填组呼吸高亮（引导落地） */
+  /* 设置页必填组呼吸高亮（引导落地）：不加 padding 避免布局跳动 */
   .set-group.attention {
-    border-radius: var(--radius-m); padding: 14px;
+    border-radius: var(--radius-m);
     animation: attention 1.6s ease 2;
   }
   @keyframes attention {
@@ -543,11 +562,11 @@
     </div>
     <div class="card">
       <div class="row" style="justify-content:space-between">
-        <div>
-          <h3 id="art-topic-title">未选定选题</h3>
+        <div style="flex:1;min-width:0">
+          <h3 id="art-topic-title" style="overflow-wrap:anywhere">未选定选题</h3>
           <div class="sub" id="art-topic-meta"></div>
         </div>
-        <span class="chip" id="chip-ai" style="display:none"></span>
+        <span class="chip" id="chip-ai" style="display:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none"></span>
       </div>
       <label class="field"><span class="cap">写作补充要求（语气 / 行业 / 禁忌，可空）</span>
         <input type="text" id="in-user-extra" placeholder="例如：面向零基础读者，多举国内工具例子">
@@ -557,7 +576,7 @@
         <button class="btn secondary" id="btn-rewrite" style="display:none">换个写法重写</button>
         <button class="btn ghost" id="btn-illustrate" style="display:none">智能配图（技术文出示意图 / 情感文出氛围图）</button>
         <button class="btn ghost" id="btn-check-ai" style="display:none">检测 AI 味</button>
-        <button class="btn danger" id="btn-deai" style="display:none">一键去 AI 味</button>
+        <button class="btn warn" id="btn-deai" style="display:none">一键去 AI 味</button>
       </div>
       <div style="height:12px"></div>
       <div class="console" id="log-article"></div>
@@ -940,19 +959,21 @@ async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
     while (true) {
       let t;
       try {
-        t = await api(`/api/task/${taskId}`, { timeoutMs: 8000 });
+        t = await api(`/api/task/${taskId}?since=${shown}`, { timeoutMs: 8000 });
         misses = 0;
       } catch (e) {
         if (++misses >= 4) throw new Error("与本地服务失联，请重启程序后到「历史」找回产出");
         await new Promise(r => setTimeout(r, 1200));
         continue;
       }
-      const logs = t.log || [];   // 任务被后端清理时无 log 字段，防炸
-      for (; shown < logs.length; shown++) {
+      // since 增量：log 只含第 shown 行之后的新行
+      const logs = t.log || [];
+      for (const line of logs) {
         const div = document.createElement("div");
-        div.textContent = logs[shown];
-        if (/成功|完成|干净/.test(logs[shown])) div.className = "okline";
+        div.textContent = line;
+        if (/成功|完成|干净/.test(line)) div.className = "okline";
         consoleEl.appendChild(div);
+        shown++;
       }
       // 进度行/取消行保持在末尾（appendChild 对已有节点是移动）
       if (t.progress) {
@@ -1275,11 +1296,16 @@ $("#btn-save-md").addEventListener("click", () => saveArticle());
 
 /* 编辑即标记未保存 + 防抖刷新右侧实时预览 */
 let _liveTimer = null;
+let _liveSeq = 0;          // 响应乱序保护：只采用最新一次请求的结果
+let _composing = false;    // 输入法组合中：不刷新预览（避免半截拼音混入渲染）
+const LIVE_EMPTY = '<p class="empty-hint">开始输入后这里实时显示最终排版效果</p>';
 async function refreshLivePreview() {
   const md = $("#md-editor").value;
-  if (!md.trim()) { $("#live-preview").innerHTML = '<p class="muted" style="padding:20px">开始输入后这里实时显示最终排版效果</p>'; return; }
+  if (!md.trim()) { $("#live-preview").innerHTML = LIVE_EMPTY; return; }
+  const seq = ++_liveSeq;
   try {
     const r = await api("/api/render_text", { method: "POST", body: { md, theme: S.theme }, timeoutMs: 15000 });
+    if (seq !== _liveSeq) return;   // 已有更新的请求发出，丢弃旧响应
     $("#live-preview").innerHTML = r.html;
   } catch (_) { /* 渲染失败保持上一帧，不打扰输入 */ }
 }
@@ -1287,10 +1313,15 @@ function scheduleLivePreview() {
   clearTimeout(_liveTimer);
   _liveTimer = setTimeout(refreshLivePreview, 500);
 }
+$("#md-editor").addEventListener("compositionstart", () => { _composing = true; });
+$("#md-editor").addEventListener("compositionend", () => {
+  _composing = false;
+  scheduleLivePreview();   // 组合完成后补一次刷新
+});
 $("#md-editor").addEventListener("input", () => {
-  setDirty(true);
+  if (!MD_DIRTY) setDirty(true);   // 只在状态翻转时走 pywebview 桥，减少每键开销
   $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
-  scheduleLivePreview();
+  if (!_composing) scheduleLivePreview();
 });
 
 /* 复制排版后内容：富文本进剪贴板，可直接粘贴进公众号编辑器 */
@@ -1437,8 +1468,16 @@ $("#tb-color").addEventListener("input", (e) => {
   edSpanStyle(`color:${e.target.value}`);
 });
 
-/* Ctrl+B/I 快捷键（编辑器内） */
+/* Ctrl+B/I 快捷键与 Tab 缩进（编辑器内） */
 $("#md-editor").addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    // Tab 插入两空格而不是跳焦点（Markdown 缩进）
+    e.preventDefault();
+    const ed = e.target;
+    ed.setRangeText("  ", ed.selectionStart, ed.selectionEnd, "end");
+    ed.dispatchEvent(new Event("input"));
+    return;
+  }
   if (!(e.ctrlKey || e.metaKey)) return;
   const k = e.key.toLowerCase();
   if (k === "b") { e.preventDefault(); edSurround("**", "**"); }
@@ -1587,7 +1626,7 @@ function resetUiForRun() {
   ["log-topic", "log-article", "log-cover", "log-publish"].forEach(id =>
     $(`#${id}`).classList.remove("show"));
   $("#cover-box").innerHTML = "还没有封面";
-  $("#live-preview").innerHTML = '<p class="muted" style="padding:20px">开始输入后这里实时显示最终排版效果</p>';
+  $("#live-preview").innerHTML = LIVE_EMPTY;
   $("#art-topic-title").textContent = "未选定选题";
   $("#art-topic-meta").textContent = "";
   $("#art-chars").textContent = "";
@@ -1619,7 +1658,7 @@ async function loadRunsPage() {
   box.innerHTML = "加载中…";
   try {
     const { runs } = await api("/api/runs");
-    if (!runs.length) { box.innerHTML = '<p class="muted">还没有历史产出</p>'; return; }
+    if (!runs.length) { box.innerHTML = '<p class="empty-hint">还没有历史产出</p>'; return; }
     box.innerHTML = "";
     runs.forEach(r => {
       const row = document.createElement("div");
@@ -1684,7 +1723,7 @@ async function loadRunsPage() {
           await api("/api/runs/delete", { method: "POST", body: { run: r.run }});
           row.remove();
           toast("已删除");
-          if (!$("#history-body .run-row")) $("#history-body").innerHTML = '<p class="muted">还没有历史产出</p>';
+          if (!$("#history-body .run-row")) $("#history-body").innerHTML = '<p class="empty-hint">还没有历史产出</p>';
         } catch (e) { toast("删除失败：" + e.message, 4000); }
       });
       row.appendChild(del);
