@@ -1901,7 +1901,7 @@ function showUpdateDialog(info) {
   const ol = $("#up-items");
   ol.innerHTML = "";
   const items = (info.changelog_items && info.changelog_items.length)
-    ? info.changelog_items : ["性能优化与问题修复"];
+    ? info.changelog_items : ["其他修复与优化"];
   items.forEach(t => {
     const li = document.createElement("li");
     li.textContent = t;
@@ -1935,10 +1935,9 @@ function showUpdateDialog(info) {
         await new Promise(res => setTimeout(res, 600));
       }
       await api("/api/update/install", { method: "POST" });
-      $("#up-progress-text").textContent = "安装程序已启动，本程序即将退出…";
-      // 程序马上被 os._exit 结束，页面显示告别文案
+      $("#up-progress-text").textContent = "正在后台安装，完成后将自动打开新版本…";
       setTimeout(() => {
-        document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">正在安装新版本，请跟随安装向导完成更新</div>';
+        document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">正在更新，新版本将自动启动，本窗口可关闭</div>';
       }, 800);
     } catch (e) {
       $("#up-progress").style.display = "none";

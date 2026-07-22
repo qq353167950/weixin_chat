@@ -164,11 +164,36 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: 检出代码（读 RELEASE_NOTES.md）
+        uses: actions/checkout@v4
+
       - name: 下载全部产物
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           path: dist
+
+      - name: 提取本版本更新说明
+        id: notes
+        run: |
+          VER="${GITHUB_REF#refs/tags/}"
+          # 取 RELEASE_NOTES.md 中 "## vX.Y.Z" 到下一个 "## " 之间的条目行
+          NOTES=$(awk -v ver="## $VER" '
+            $0 == ver {found=1; next}
+            found && /^## / {exit}
+            found && /^- / {print}
+          ' RELEASE_NOTES.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="- 其他修复与优化"
+          fi
+          {
+            echo "body<<NOTES_EOF"
+            echo "$NOTES"
+            echo ""
+            echo "---"
+            echo "下载：Windows 用 \`setup\` 安装版（推荐）或绿色版 exe；macOS 解压 zip 拖入应用程序。"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
@@ -177,19 +202,4 @@ jobs:
             dist/wechat-assistant-setup-*.exe
             dist/wechat-assistant.exe
             dist/wechat-assistant-macos.zip
-          generate_release_notes: true
-          body: |
-            ## 公众号助手 桌面客户端
-
-            | 文件 | 平台 | 说明 |
-            |------|------|------|
-            | `wechat-assistant-setup-v*.exe` | Windows 10/11 | **推荐**：安装向导（选目录、桌面快捷方式、卸载器） |
-            | `wechat-assistant.exe` | Windows 10/11 | 绿色版：放任意文件夹双击即用 |
-            | `wechat-assistant-macos.zip` | macOS | 解压得 `公众号助手.app`，拖入「应用程序」 |
-
-            首次启动有配置引导：填写作模型 Key 与公众号 AppID/AppSecret 即可开写。
-            数据位置：Windows 安装版在 `%APPDATA%\公众号助手`，绿色版在 exe 同目录；
-            macOS 在 `~/Library/Application Support/公众号助手`。
-
-            无需安装 Python。Windows 需系统自带 Edge WebView2（缺失自动回退浏览器）。
-            macOS 首次打开若提示「无法验证开发者」：右键 .app → 打开（未做公证属正常）。
+          body: ${{ steps.notes.outputs.body }}

@@ -386,8 +386,9 @@ def api_check_update():
 def _friendly_changelog(raw: str, limit: int = 8) -> list[str]:
     """把 Release Notes 提炼成 1. 2. 3. 条目文案。
 
-    优先取 markdown 列表行（- / *），剥掉链接与格式符号；
-    没有列表时按句/行切分取要点。
+    只取 markdown 列表行（- / *）——Release 正文由 RELEASE_NOTES.md 生成，
+    条目行即更新内容；表格/说明段落一律忽略。无任何条目时给通用文案，
+    绝不把杂项文本编号显示。
     """
     items: list[str] = []
     for ln in (raw or "").splitlines():
@@ -396,6 +397,8 @@ def _friendly_changelog(raw: str, limit: int = 8) -> list[str]:
         if not m:
             continue
         text = m.group(1)
+        if text.startswith("|") or "---" in text[:6]:            # 表格行防御
+            continue
         text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)     # 链接→文字
         text = re.sub(r"[*_`#]+", "", text).strip()              # 去格式符
         text = re.sub(r"\s+by\s+@\S+.*$", "", text)              # 去 PR 署名尾巴
@@ -403,11 +406,7 @@ def _friendly_changelog(raw: str, limit: int = 8) -> list[str]:
         if text and len(text) > 3:
             items.append(text)
     if not items:
-        # 无列表：按行取非空文本
-        for ln in (raw or "").splitlines():
-            s = re.sub(r"[*_`#>]+", "", ln).strip()
-            if s and not s.startswith("!"):
-                items.append(s)
+        items = ["其他修复与优化"]
     return items[:limit]
 
 
@@ -467,17 +466,23 @@ def api_update_progress():
 
 @app.post("/api/update/install")
 def api_update_install():
-    """启动已下载的安装包并退出当前程序（安装器会等待本进程退出后覆盖）。"""
+    """静默安装已下载的新版并退出当前程序。
+
+    /VERYSILENT：无向导界面，自动沿用已安装路径（Inno 按 AppId 记忆）；
+    /CLOSEAPPLICATIONS：自动关闭占用文件的旧进程；
+    不用 /RESTARTAPPLICATIONS——它会按旧进程的启动信息重启，而 PyInstaller
+    单文件的临时解包目录已随旧进程消失，导致「Failed to load Python DLL」；
+    改由 installer.iss 的 [Run] 段在安装完成后启动新 exe。
+    """
     with _LOCK:
         if UPDATE_STATE["status"] != "ready" or not UPDATE_STATE["file"]:
             return jsonify({"error": "安装包未就绪"}), 400
         installer = UPDATE_STATE["file"]
     import subprocess
 
-    # /CLOSEAPPLICATIONS 让 Inno 安装器自动关占用文件的进程；
-    # 先分离启动安装器，再延迟退出自身，安装器等待期极短
     subprocess.Popen(
-        [installer, "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
+        [installer, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+         "/CLOSEAPPLICATIONS", "/NOCANCEL"],
         close_fds=True,
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
     )
