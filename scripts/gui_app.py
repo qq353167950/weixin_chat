@@ -197,7 +197,9 @@ def minimize_to_tray() -> None:
 
 
 def request_quit() -> None:
-    """真正退出：置标志后销毁窗口（closing 拦截会放行）。"""
+    """真正退出：置标志后销毁窗口（closing 拦截会放行）。幂等，重复调用无害。"""
+    if APP.quitting:
+        return
     APP.quitting = True
     stop_tray()
     if APP.window is not None:
@@ -302,18 +304,24 @@ def main() -> int:
     except Exception:
         pass
 
-    # 实例数量检查：最多 2 个
-    if not acquire_instance_slot():
-        msg = "已有 2 个实例正在运行，无法启动更多实例。\n\n请关闭其中一个窗口后重试。"
+    import os
+
+    server_only = "--server" in sys.argv
+
+    # 实例数量检查：最多 2 个窗口（--server 无窗口，跳过，CI/调试不占槽位）
+    if not server_only and not acquire_instance_slot():
+        msg = (
+            "已有 2 个实例正在运行，无法启动更多实例。\n\n"
+            "请关闭其中一个窗口后重试。\n"
+            f"（若确认没有实例在跑，可能是端口 {LOCK_PORTS[0]}/{LOCK_PORTS[1]} "
+            "被其他程序占用）"
+        )
         try:
             confirm_native(msg)  # 用原生对话框提示（桌面环境）
         except Exception:
             print(f"[错误] {msg}", file=sys.stderr)
         return 1
 
-    import os
-
-    server_only = "--server" in sys.argv
     port = pick_port(int(os.getenv("GUI_PORT", "8093") or 8093))
     url = f"http://127.0.0.1:{port}"
 

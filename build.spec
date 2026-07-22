@@ -13,6 +13,9 @@
 
 import sys
 
+sys.path.insert(0, "scripts")
+from version import __version__ as APP_VERSION  # noqa: E402
+
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
@@ -50,7 +53,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "pydoc_data"],
+    excludes=["tkinter", "unittest", "pydoc_data", "sqlite3", "lib2to3",
+              "doctest", "test", "_distutils_hack"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -85,7 +89,7 @@ if IS_MAC:
         bundle_identifier="io.github.qq353167950.weixinchat",
         info_plist={
             "CFBundleDisplayName": "公众号助手",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleShortVersionString": APP_VERSION,
             "NSHighResolutionCapable": True,
             # WKWebView 访问本机 Flask 服务
             "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},

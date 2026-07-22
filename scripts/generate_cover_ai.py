@@ -263,7 +263,11 @@ def gen_dashscope(prompt: str) -> Image.Image:
         raise RuntimeError(f"DashScope no task_id: {data}")
 
     task_url = f"{base}/api/v1/tasks/{task_id}"
+    from task_hooks import check_cancelled, report_progress
+
     for i in range(60):
+        check_cancelled()          # 生图轮询是取消探针点（用户点取消秒级停）
+        report_progress(f"生图中，第 {i + 1}/60 次查询…")
         time.sleep(2 if i < 5 else 3)
         td = request_json(
             "GET",
@@ -321,6 +325,9 @@ def generate_ai_cover(
     style: str = "editorial",
     overlay: bool = True,
 ) -> Path:
+    """AI 生图封面。IMAGE_FALLBACK_TEMPLATE=1（默认）时生图失败自动退回文字模板。"""
+    from task_hooks import check_cancelled, report_progress
+
     # IMAGE_PROVIDER 为主；兼容旧名 COVER_PROVIDER
     provider = (
         provider
@@ -328,20 +335,35 @@ def generate_ai_cover(
         or os.getenv("COVER_PROVIDER", "openai")
     ).strip().lower()
     style = style or os.getenv("IMAGE_STYLE", "") or os.getenv("COVER_STYLE", "editorial")
+
+    if provider in {"template", "local", "pil"}:
+        return template_generate_cover(title, out_path, theme="default")
+
     prompt = build_prompt(title, abstract=abstract, style=style)
     print(f"[prompt] {prompt[:200]}...")
+    check_cancelled()
+    try:
+        if provider in {"openai", "oai", "dalle", "dall-e"}:
+            report_progress("正在请求生图 API（最长 2 分钟）…")
+            img = gen_openai(prompt)
+        elif provider in {"dashscope", "wanx", "wanxiang", "ali", "qwen-image"}:
+            img = gen_dashscope(prompt)
+        else:
+            raise RuntimeError(
+                f"未知 IMAGE_PROVIDER={provider}。可选: openai | dashscope | template"
+            )
+    except BaseException as e:
+        # 取消不兜底，其余失败按配置退回文字模板（GUI/CLI/pipeline 统一生效）
+        from task_hooks import TaskCancelled
 
-    if provider in {"openai", "oai", "dalle", "dall-e"}:
-        img = gen_openai(prompt)
-    elif provider in {"dashscope", "wanx", "wanxiang", "ali", "qwen-image"}:
-        img = gen_dashscope(prompt)
-    elif provider in {"template", "local", "pil"}:
-        return template_generate_cover(title, out_path, theme="default")
-    else:
-        raise RuntimeError(
-            f"未知 IMAGE_PROVIDER={provider}。可选: openai | dashscope | template"
-        )
+        if isinstance(e, TaskCancelled):
+            raise
+        if os.getenv("IMAGE_FALLBACK_TEMPLATE", "1") != "0":
+            print(f"[封面] AI 生图失败（{e}），已自动改用文字模板封面")
+            return template_generate_cover(title, out_path, theme="default")
+        raise
 
+    check_cancelled()
     img = fit_cover(img, TARGET_SIZE)
     overlay_flag = os.getenv("IMAGE_OVERLAY_TITLE", os.getenv("COVER_OVERLAY_TITLE", "1"))
     if overlay and overlay_flag != "0":

@@ -1126,6 +1126,54 @@ def api_task_cancel(tid: str):
     return jsonify({"ok": True})
 
 
+@app.post("/api/open_url")
+def api_open_url():
+    """用系统默认浏览器打开链接（桌面窗口内 window.open 行为不可靠）。"""
+    url = str((request.get_json(force=True) or {}).get("url") or "").strip()
+    if not url.startswith(("https://mp.weixin.qq.com", "https://github.com/qq353167950/")):
+        return jsonify({"error": "不允许的链接"}), 400
+    webbrowser.open(url)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/open_folder")
+def api_open_folder():
+    """在资源管理器中打开产出目录。body.run 指定历史目录，缺省为当前。"""
+    name = str((request.get_json(silent=True) or {}).get("run") or "").strip()
+    if name:
+        if not re.fullmatch(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{1,3})?", name):
+            return jsonify({"error": "无效的记录名"}), 400
+        target = ROOT / "runs" / name
+    else:
+        with _LOCK:
+            wd = STATE["work_dir"]
+        target = Path(wd) if wd else ROOT / "runs"
+    if not target.exists():
+        return jsonify({"error": "目录不存在"}), 404
+    import subprocess
+
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", str(target)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+    return jsonify({"ok": True})
+
+
+@app.get("/api/article/export")
+def api_article_export():
+    """把当前文章作为 .md 附件下载（导出备份/迁移用）。"""
+    md = _article_path()
+    if not md:
+        return jsonify({"error": "还没有文章"}), 404
+    title, _ = extract_title_and_body(md.read_text(encoding="utf-8"))
+    safe = re.sub(r'[\\/:*?"<>|]', "_", title or "文章")[:40]
+    resp = send_from_directory(md.parent, md.name, as_attachment=True,
+                               download_name=f"{safe}.md")
+    return resp
+
+
 @app.post("/api/quit")
 def api_quit():
     """退出程序（浏览器回退模式专用：关标签页杀不掉进程，给个明确出口）。
@@ -1151,6 +1199,8 @@ SETTINGS_SCHEMA = [
             {"key": "LLM_BASE_URL", "label": "接口地址（OpenAI 兼容 /v1）"},
             {"key": "LLM_MODEL", "label": "模型名"},
             {"key": "LLM_TEMPERATURE", "label": "温度 0~1"},
+            {"key": "LLM_TIMEOUT_SEC", "label": "请求超时秒数"},
+            {"key": "LLM_STREAM", "label": "流式输出（防中转超时，推荐开）", "type": "toggle"},
         ],
     },
     {
@@ -1196,6 +1246,7 @@ SETTINGS_SCHEMA = [
                 "options": ["editorial", "tech", "warm", "business", "nature"],
             },
             {"key": "IMAGE_OVERLAY_TITLE", "label": "封面叠中文标题", "type": "toggle"},
+            {"key": "IMAGE_FALLBACK_TEMPLATE", "label": "生图失败自动用文字模板", "type": "toggle"},
         ],
     },
     {

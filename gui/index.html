@@ -586,6 +586,8 @@
         <h3>文章编辑<span class="dirty-dot" id="dirty-dot" style="display:none">·未保存</span></h3>
         <div class="row">
           <span class="muted" id="art-chars"></span>
+          <button class="btn ghost" id="btn-export-md" title="下载当前文章的 Markdown 文件">导出 .md</button>
+          <button class="btn ghost" id="btn-open-folder" title="在资源管理器中打开产出目录">打开目录</button>
           <button class="btn secondary" id="btn-save-md">保存修改</button>
           <button class="btn" id="btn-goto-cover">下一步：封面</button>
         </div>
@@ -717,8 +719,11 @@
           <p class="muted" style="margin:8px 0 4px">media_id</p>
           <p class="mono" id="success-mid" style="font-size:13px"></p>
           <div style="height:10px"></div>
-          <button class="btn ghost" id="btn-copy-mid">复制 media_id</button>
-          <p class="muted" style="margin-top:14px">打开 mp.weixin.qq.com → 草稿箱，预览后手动发布</p>
+          <div class="row" style="justify-content:center">
+            <button class="btn" id="btn-open-mp">打开公众号后台</button>
+            <button class="btn ghost" id="btn-copy-mid">复制 media_id</button>
+          </div>
+          <p class="muted" style="margin-top:14px">在后台「草稿箱」预览满意后手动发布</p>
           <div style="height:16px"></div>
           <button class="btn secondary" id="btn-new-run">再写一篇</button>
         </div>
@@ -1494,6 +1499,19 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/* 导出 .md / 打开产出目录 */
+$("#btn-export-md").addEventListener("click", async () => {
+  if (MD_DIRTY) await saveArticle({ silent: true });
+  const a = document.createElement("a");
+  a.href = "/api/article/export";
+  a.download = "";
+  a.click();
+});
+$("#btn-open-folder").addEventListener("click", async () => {
+  try { await api("/api/open_folder", { method: "POST", body: {} }); }
+  catch (e) { toast(e.message, 3000); }
+});
+
 /* 下一步：封面（先保存再走） */
 $("#btn-goto-cover").addEventListener("click", async () => {
   if (MD_DIRTY) await saveArticle({ silent: true });
@@ -1599,6 +1617,12 @@ $("#btn-publish").addEventListener("click", async () => {
     await refreshState();
     toast("已进入草稿箱 ✓", 4000);
   } catch (e) { toast("失败：" + e.message, 5000); }
+});
+
+/* 发布成功：一键打开公众号后台（系统默认浏览器） */
+$("#btn-open-mp").addEventListener("click", async () => {
+  try { await api("/api/open_url", { method: "POST", body: { url: "https://mp.weixin.qq.com/" } }); }
+  catch (_) { window.open("https://mp.weixin.qq.com/", "_blank"); }
 });
 
 $("#btn-copy-mid").addEventListener("click", async () => {
@@ -1709,6 +1733,16 @@ async function loadRunsPage() {
         } catch (e) { toast("打开失败：" + e.message, 4000); }
       });
       row.appendChild(btn);
+      // 打开目录（看文章/封面原始文件）
+      const openBtn = document.createElement("button");
+      openBtn.className = "btn ghost";
+      openBtn.textContent = "目录";
+      openBtn.title = "在资源管理器打开该产出目录";
+      openBtn.addEventListener("click", async () => {
+        try { await api("/api/open_folder", { method: "POST", body: { run: r.run } }); }
+        catch (e) { toast(e.message, 3000); }
+      });
+      row.appendChild(openBtn);
       // 删除按钮（当前编辑中的不可删）
       const del = document.createElement("button");
       del.className = "btn ghost";

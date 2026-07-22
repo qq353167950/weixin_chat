@@ -21,6 +21,46 @@ from typing import Any
 
 from http_util import request_json, with_session
 
+# 常见微信错误码中文对照（覆盖 token/上传/草稿全链路，新手最常撞的坑优先）
+WECHAT_ERRCODE_CN = {
+    -1: "微信系统繁忙，请稍后重试",
+    40001: "AppSecret 错误或 access_token 无效，请核对设置页的 AppSecret",
+    40002: "凭证类型不合法",
+    40004: "媒体文件类型不合法（封面/配图需 jpg/png）",
+    40007: "media_id 无效（封面必须用永久素材接口上传）",
+    40013: "AppID 不合法，请核对设置页的 AppID",
+    40125: "AppSecret 无效，请到公众号后台重置后重新填写",
+    40164: "本机 IP 不在白名单：请到公众号后台「基本配置 → IP白名单」添加当前出口 IP",
+    41001: "缺少 access_token 参数",
+    42001: "access_token 已过期",
+    42007: "凭证已失效，需要重新获取",
+    43101: "用户未关注/无权限",
+    44002: "POST 内容为空",
+    45001: "媒体文件超过大小限制",
+    45002: "正文内容超过长度限制（约 2 万字），请精简后重试",
+    45003: "标题超过长度限制",
+    45009: "接口调用次数超过每日限额，请明天再试",
+    47001: "解析 JSON 失败（通常是内容含非法字符）",
+    48001: "公众号无此接口权限（草稿箱需要认证的公众号）",
+    53401: "封面图片尺寸不符合要求",
+    53404: "账号已被限制带货能力",
+    61004: "本机 IP 不在白名单：请到公众号后台添加当前出口 IP",
+    61451: "参数错误",
+    61452: "无效客服账号",
+    87009: "无效的签名",
+}
+
+# 这些错误码代表 token 失效，自动重取一次即可恢复
+_TOKEN_RETRY_CODES = {40001, 40014, 41001, 42001, 42007}
+
+
+def _errcode_message(data: dict) -> str:
+    """把微信返回的 errcode/errmsg 翻译成中文提示（保留原始信息便于排查）。"""
+    code = data.get("errcode")
+    cn = WECHAT_ERRCODE_CN.get(code)
+    raw = f"errcode={code} errmsg={data.get('errmsg', '')}"
+    return f"{cn}（{raw}）" if cn else raw
+
 
 class WeChatAPIError(RuntimeError):
     pass
@@ -54,22 +94,31 @@ class WeChatClient:
         return self._token
 
     # ---------- 素材 ----------
+    def _call_with_token_retry(self, do_call):
+        """执行 do_call(token)；token 失效类错误码时强刷 token 重试一次。"""
+        data = do_call(self.get_access_token())
+        if data.get("errcode") in _TOKEN_RETRY_CODES:
+            data = do_call(self.get_access_token(force=True))
+        return data
+
     def upload_permanent_image(self, image_path: str | Path) -> str:
         """上传永久图片素材，返回 media_id（封面必须用这个）。"""
         image_path = Path(image_path)
         if not image_path.exists():
             raise FileNotFoundError(f"封面图不存在: {image_path}")
+        raw = image_path.read_bytes()   # 读成 bytes：重试时文件指针不会已到 EOF
 
-        token = self.get_access_token()
-        url = (
-            "https://api.weixin.qq.com/cgi-bin/material/add_material"
-            f"?access_token={token}&type=image"
-        )
-        with image_path.open("rb") as f:
-            files = {"media": (image_path.name, f, "image/jpeg")}
-            data = self._post_files(url, files=files)
+        def _do(token: str) -> dict:
+            url = (
+                "https://api.weixin.qq.com/cgi-bin/material/add_material"
+                f"?access_token={token}&type=image"
+            )
+            files = {"media": (image_path.name, raw, "image/jpeg")}
+            return self._post_files(url, files=files)
+
+        data = self._call_with_token_retry(_do)
         if "media_id" not in data:
-            raise WeChatAPIError(f"上传永久素材失败: {data}")
+            raise WeChatAPIError(f"上传封面失败：{_errcode_message(data)}")
         return data["media_id"]
 
     def upload_content_image(self, image_path: str | Path) -> str:
@@ -81,17 +130,19 @@ class WeChatClient:
         image_path = Path(image_path)
         if not image_path.exists():
             raise FileNotFoundError(f"正文图不存在: {image_path}")
+        raw = image_path.read_bytes()
 
-        token = self.get_access_token()
-        url = (
-            "https://api.weixin.qq.com/cgi-bin/media/uploadimg"
-            f"?access_token={token}"
-        )
-        with image_path.open("rb") as f:
-            files = {"media": (image_path.name, f, "image/jpeg")}
-            data = self._post_files(url, files=files)
+        def _do(token: str) -> dict:
+            url = (
+                "https://api.weixin.qq.com/cgi-bin/media/uploadimg"
+                f"?access_token={token}"
+            )
+            files = {"media": (image_path.name, raw, "image/jpeg")}
+            return self._post_files(url, files=files)
+
+        data = self._call_with_token_retry(_do)
         if "url" not in data:
-            raise WeChatAPIError(f"上传正文图片失败: {data}")
+            raise WeChatAPIError(f"上传正文图片失败：{_errcode_message(data)}")
         return data["url"]
 
     # ---------- 草稿 ----------
@@ -124,8 +175,6 @@ class WeChatClient:
         if len(digest) > 120:
             digest = digest[:120]
 
-        token = self.get_access_token()
-        url = f"https://api.weixin.qq.com/cgi-bin/draft/add?access_token={token}"
         payload: dict[str, Any] = {
             "articles": [
                 {
@@ -141,11 +190,17 @@ class WeChatClient:
                 }
             ]
         }
+        token = self.get_access_token()
         # 必须 ensure_ascii=False，否则中文可能出 45003 等问题
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        url = f"https://api.weixin.qq.com/cgi-bin/draft/add?access_token={token}"
         data = self._post_raw(url, body=body, headers={"Content-Type": "application/json; charset=utf-8"})
+        if data.get("errcode") in _TOKEN_RETRY_CODES:
+            token = self.get_access_token(force=True)
+            url = f"https://api.weixin.qq.com/cgi-bin/draft/add?access_token={token}"
+            data = self._post_raw(url, body=body, headers={"Content-Type": "application/json; charset=utf-8"})
         if "media_id" not in data:
-            raise WeChatAPIError(f"创建草稿失败: {data}")
+            raise WeChatAPIError(f"创建草稿失败：{_errcode_message(data)}")
         return data["media_id"]
 
     # ---------- HTTP (always close) ----------

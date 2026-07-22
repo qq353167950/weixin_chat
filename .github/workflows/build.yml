@@ -58,12 +58,24 @@ jobs:
       - name: 冒烟验证 exe 可启动（--server 模式）
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "dist\公众号助手.exe" -ArgumentList "--server" -PassThru -WorkingDirectory (New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force)
-          Start-Sleep -Seconds 20
+          $env:GUI_PORT = "18293"   # 显式端口：避开默认 8093 可能的占用与 pick_port 换端口
+          $dir = New-Item -ItemType Directory -Path "$env:TEMP\exe-smoke" -Force
+          $proc = Start-Process -FilePath "dist\公众号助手.exe" -ArgumentList "--server" -PassThru -WorkingDirectory $dir
+          $ok = $false
+          foreach ($i in 1..40) {
+            Start-Sleep -Seconds 1
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:18293/" -UseBasicParsing -TimeoutSec 3
+              if ($resp.StatusCode -eq 200) { $ok = $true; break }
+            } catch {}
+          }
           try {
-            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8093/" -UseBasicParsing -TimeoutSec 10
-            if ($resp.StatusCode -ne 200) { throw "首页返回 $($resp.StatusCode)" }
-            $state = Invoke-WebRequest -Uri "http://127.0.0.1:8093/api/state" -UseBasicParsing -TimeoutSec 10
+            if (-not $ok) {
+              Write-Host "首页请求失败，启动日志："
+              Get-Content "$dir\app.log" -ErrorAction SilentlyContinue
+              throw "exe 服务未在 40 秒内就绪"
+            }
+            $state = Invoke-WebRequest -Uri "http://127.0.0.1:18293/api/state" -UseBasicParsing -TimeoutSec 10
             if ($state.StatusCode -ne 200) { throw "/api/state 返回 $($state.StatusCode)" }
             Write-Host "exe 启动冒烟通过"
           } finally {
@@ -77,18 +89,12 @@ jobs:
           $v = if ("$env:GITHUB_REF" -like "refs/tags/v*") { "$env:GITHUB_REF" -replace "refs/tags/v","" } else { "0.0.0-dev" }
           "version=$v" >> $env:GITHUB_OUTPUT
 
-      - name: 安装 Inno Setup 中文语言文件
-        shell: pwsh
-        run: |
-          $dest = "${env:ProgramFiles(x86)}\Inno Setup 6\Languages\ChineseSimplified.isl"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_5_1/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile $dest
-          if (-not (Test-Path $dest)) { throw "中文语言文件下载失败" }
-
       - name: 编译安装包（Inno Setup）
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          # 中文语言文件已 vendor 进 installer/，无需联网下载
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\installer.iss"
           Get-ChildItem dist
 
@@ -134,16 +140,16 @@ jobs:
 
       - name: 冒烟验证 .app 内可执行文件可启动（--server 模式）
         run: |
-          "./dist/公众号助手.app/Contents/MacOS/公众号助手" --server > smoke.log 2>&1 &
+          GUI_PORT=18293 "./dist/公众号助手.app/Contents/MacOS/公众号助手" --server > smoke.log 2>&1 &
           APP_PID=$!
           for i in $(seq 1 40); do
             sleep 1
-            curl -sf --noproxy '*' http://127.0.0.1:8093/ > /dev/null && break
+            curl -sf --noproxy '*' http://127.0.0.1:18293/ > /dev/null && break
           done
-          if ! curl -sf --noproxy '*' http://127.0.0.1:8093/ > /dev/null; then
+          if ! curl -sf --noproxy '*' http://127.0.0.1:18293/ > /dev/null; then
             echo "首页请求失败，启动日志："; cat smoke.log; kill $APP_PID 2>/dev/null; exit 1
           fi
-          curl -sf --noproxy '*' http://127.0.0.1:8093/api/state > /dev/null || { echo "/api/state 请求失败"; cat smoke.log; kill $APP_PID 2>/dev/null; exit 1; }
+          curl -sf --noproxy '*' http://127.0.0.1:18293/api/state > /dev/null || { echo "/api/state 请求失败"; cat smoke.log; kill $APP_PID 2>/dev/null; exit 1; }
           echo "mac 启动冒烟通过"
           kill $APP_PID
 
@@ -204,4 +210,5 @@ jobs:
             dist/wechat-assistant-setup-*.exe
             dist/wechat-assistant.exe
             dist/wechat-assistant-macos.zip
+          fail_on_unmatched_files: true
           body: ${{ steps.notes.outputs.body }}

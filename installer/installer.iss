@@ -41,13 +41,21 @@ RestartApplications=no
 PrivilegesRequiredOverridesAllowed=dialog
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+
+[UninstallDelete]
+; 卸载时清运行期缓存；用户数据（.env / runs）保留
+Type: filesandordirs; Name: "{app}\webview_data"
+Type: filesandordirs; Name: "{app}\update"
+Type: files; Name: "{app}\app.log"
+Type: files; Name: "{app}\app.log.1"
+Type: files; Name: "{app}\ui_state.json"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

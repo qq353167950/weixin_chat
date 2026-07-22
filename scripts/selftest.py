@@ -201,6 +201,44 @@ def test_scrub_citations() -> None:
     check("正常文字链接保留", "mp.weixin.qq.com" in keep and "[这篇]" in keep, keep)
 
 
+def test_version_compare() -> None:
+    print("[8] 版本号比较（更新链路基石）")
+    from version import compare_version
+
+    check("1.2.3 < 1.2.4", compare_version("1.2.3", "1.2.4") == -1)
+    check("1.10.0 > 1.9.9", compare_version("1.10.0", "1.9.9") == 1)
+    check("相等", compare_version("1.6.3", "1.6.3") == 0)
+    check("带 v 前缀", compare_version("v1.2.3", "1.2.4") == -1)
+    check("带后缀 -beta", compare_version("1.2.3-beta", "1.2.3") == 0)
+
+
+def test_friendly_changelog() -> None:
+    print("[9] Release 说明条目化")
+    from gui_server import _friendly_changelog
+
+    items = _friendly_changelog("- 新增：功能A\n- 修复：[问题B](https://x.com) by @bot\n说明段落忽略")
+    check("提取条目并剥链接署名", items == ["新增：功能A", "修复：问题B"], str(items))
+    check("表格正文退化为通用文案",
+          _friendly_changelog("| 文件 | 平台 |\n|---|---|\n| a.exe | Win |") == ["其他修复与优化"])
+
+
+def test_wechat_errcode() -> None:
+    print("[10] 微信错误码中文翻译")
+    from wechat_client import _errcode_message
+
+    check("40164 IP 白名单提示", "IP" in _errcode_message({"errcode": 40164, "errmsg": "x"}))
+    check("未知码保留原始信息", "errcode=99999" in _errcode_message({"errcode": 99999, "errmsg": "y"}))
+
+
+def test_strip_fence() -> None:
+    print("[11] 整篇代码围栏剥离")
+    from markdown_to_wechat_html import _strip_outer_fence
+
+    check("剥外层围栏", _strip_outer_fence("```markdown\n# T\n正文\n```") == "# T\n正文")
+    inner = "# T\n\n```python\ncode\n```\n\n尾"
+    check("内部真代码块不动", _strip_outer_fence(inner) == inner)
+
+
 def main() -> int:
     print("=" * 56)
     print("  本地冒烟自测（离线，不调用外部 API）")
@@ -214,6 +252,10 @@ def main() -> int:
         test_template_cover,
         test_count_images,
         test_scrub_citations,
+        test_version_compare,
+        test_friendly_changelog,
+        test_wechat_errcode,
+        test_strip_fence,
     ]
     for t in tests:
         try:
