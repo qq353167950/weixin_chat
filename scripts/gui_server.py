@@ -492,13 +492,13 @@ def api_update_progress():
 
 @app.post("/api/update/install")
 def api_update_install():
-    """静默安装已下载的新版并退出当前程序。
+    """静默安装新版并自动重启：由引导批处理接管，不依赖安装器隐式行为。
 
-    /VERYSILENT：无向导界面，自动沿用已安装路径（Inno 按 AppId 记忆）；
-    /CLOSEAPPLICATIONS：自动关闭占用文件的旧进程；
-    不用 /RESTARTAPPLICATIONS——它会按旧进程的启动信息重启，而 PyInstaller
-    单文件的临时解包目录已随旧进程消失，导致「Failed to load Python DLL」；
-    改由 installer.iss 的 [Run] 段在安装完成后启动新 exe。
+    流程：写 update.bat → 分离启动 → 本进程退出 →
+    bat 同步跑安装器（/VERYSILENT /DIR=当前安装目录，UAC 弹窗时用户可见可点）
+    → 安装完成后按明确路径启动新版「公众号助手.exe」。
+    之前的问题：安装器分离启动后本进程立刻退出，UAC 确认框无人处理
+    导致安装从未执行；启动新版依赖完成页选项在静默下不可靠。
     """
     with _LOCK:
         if UPDATE_STATE["status"] != "ready" or not UPDATE_STATE["file"]:
@@ -506,11 +506,29 @@ def api_update_install():
         installer = UPDATE_STATE["file"]
     import subprocess
 
+    # 安装目标 = 当前 exe 所在目录（frozen）；源码运行时仅作冒烟不真装
+    exe_dir = Path(sys.executable).resolve().parent
+    new_exe = exe_dir / "公众号助手.exe"
+    bat = ROOT / "update" / "run_update.bat"
+    # cmd 按系统本地码页（中文 Windows=GBK）解析 bat，UTF-8 中文路径会乱码
+    bat.write_text(
+        "@echo off\r\n"
+        "echo Installing update, please wait...\r\n"
+        f'"{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
+        f'/CLOSEAPPLICATIONS /NOCANCEL /DIR="{exe_dir}"\r\n'
+        "if errorlevel 1 (\r\n"
+        "  echo Install failed, error code %errorlevel%. Please download manually from GitHub.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        f'start "" "{new_exe}"\r\n',
+        encoding="gbk", errors="replace",
+    )
+    # 控制台窗口可见：UAC 弹窗与失败信息用户都能看到
     subprocess.Popen(
-        [installer, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-         "/CLOSEAPPLICATIONS", "/NOCANCEL"],
+        ["cmd", "/c", str(bat)],
+        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         close_fds=True,
-        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
     )
     threading.Timer(1.0, lambda: os._exit(0)).start()
     return jsonify({"ok": True})
