@@ -652,11 +652,11 @@
         <div class="sub">使用设置里的生图模型（IMAGE_*）</div>
         <label class="field"><span class="cap">画面风格</span>
           <select id="in-cover-style">
-            <option value="editorial">editorial · 杂志编辑风</option>
-            <option value="tech">tech · 科技感</option>
-            <option value="warm">warm · 温暖生活</option>
-            <option value="business">business · 商务简约</option>
-            <option value="nature">nature · 自然氛围</option>
+            <option value="editorial">杂志编辑风</option>
+            <option value="tech">科技感</option>
+            <option value="warm">温暖生活</option>
+            <option value="business">商务简约</option>
+            <option value="nature">自然氛围</option>
           </select>
         </label>
         <div class="row">
@@ -1800,8 +1800,11 @@ async function loadSettings() {
         const lab = document.createElement("label");
         lab.className = "field";
         lab.innerHTML = `<span class="cap">${f.label}</span>
-          <select data-key="${f.key}">${f.options.map(o =>
-            `<option value="${o}" ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+          <select data-key="${f.key}">${f.options.map(o => {
+            // 选项可为 "value" 或 ["value", "中文标签"]
+            const [v, lbl] = Array.isArray(o) ? o : [o, o];
+            return `<option value="${v}" ${v === val ? "selected" : ""}>${lbl}</option>`;
+          }).join("")}</select>`;
         grid.appendChild(lab);
       } else {
         const lab = document.createElement("label");

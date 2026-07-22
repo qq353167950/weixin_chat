@@ -510,12 +510,21 @@ def api_update_install():
     exe_dir = Path(sys.executable).resolve().parent
     new_exe = exe_dir / "公众号助手.exe"
     bat = ROOT / "update" / "run_update.bat"
+    # 装在 Program Files 时静默安装需要管理员：用 PowerShell RunAs 显式提权
+    # （否则 Inno 返回错误码 5 拒绝访问）；UAC 弹窗由用户确认。
+    # ArgumentList 单引号项含空格时 PS 会自动加引号传递，Inno 能正确解析 /DIR
+    ps_cmd = (
+        "$ErrorActionPreference='Stop'; "
+        f"$p = Start-Process -FilePath '{installer}' "
+        "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
+        f"'/CLOSEAPPLICATIONS','/NOCANCEL','/DIR=\\\"{exe_dir}\\\"' "
+        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    )
     # cmd 按系统本地码页（中文 Windows=GBK）解析 bat，UTF-8 中文路径会乱码
     bat.write_text(
         "@echo off\r\n"
-        "echo Installing update, please wait...\r\n"
-        f'"{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
-        f'/CLOSEAPPLICATIONS /NOCANCEL /DIR="{exe_dir}"\r\n'
+        "echo Installing update, a UAC prompt may appear - please click Yes.\r\n"
+        f'powershell -NoProfile -Command "{ps_cmd}"\r\n'
         "if errorlevel 1 (\r\n"
         "  echo Install failed, error code %errorlevel%. Please download manually from GitHub.\r\n"
         "  pause\r\n"
@@ -1209,9 +1218,17 @@ SETTINGS_SCHEMA = [
         "fields": [
             {
                 "key": "SEARCH_PROVIDER",
-                "label": "搜索服务（multi=已配Key的源一起搜）",
+                "label": "搜索服务",
                 "type": "select",
-                "options": ["auto", "multi", "tavily", "bocha", "bing", "serper", "duckduckgo"],
+                "options": [
+                    ["auto", "自动（多Key全搜/单Key用该源）"],
+                    ["multi", "全部一起搜（已配Key的源并发）"],
+                    ["tavily", "Tavily"],
+                    ["bocha", "博查（国内）"],
+                    ["bing", "必应 Bing"],
+                    ["serper", "Serper（谷歌）"],
+                    ["duckduckgo", "DuckDuckGo（免费）"],
+                ],
             },
             {"key": "SEARCH_DOMAIN", "label": "账号领域关键词"},
             {"key": "TAVILY_API_KEY", "label": "Tavily Key", "secret": True},
@@ -1233,7 +1250,11 @@ SETTINGS_SCHEMA = [
                 "key": "IMAGE_PROVIDER",
                 "label": "生图方式",
                 "type": "select",
-                "options": ["openai", "dashscope", "template"],
+                "options": [
+                    ["openai", "OpenAI 兼容（DALL·E 等）"],
+                    ["dashscope", "阿里通义万相"],
+                    ["template", "本地文字模板（免 Key）"],
+                ],
             },
             {"key": "IMAGE_API_KEY", "label": "API Key", "secret": True},
             {"key": "IMAGE_BASE_URL", "label": "接口根地址"},
@@ -1243,7 +1264,13 @@ SETTINGS_SCHEMA = [
                 "key": "IMAGE_STYLE",
                 "label": "画面风格",
                 "type": "select",
-                "options": ["editorial", "tech", "warm", "business", "nature"],
+                "options": [
+                    ["editorial", "杂志编辑风"],
+                    ["tech", "科技感"],
+                    ["warm", "温暖生活"],
+                    ["business", "商务简约"],
+                    ["nature", "自然氛围"],
+                ],
             },
             {"key": "IMAGE_OVERLAY_TITLE", "label": "封面叠中文标题", "type": "toggle"},
             {"key": "IMAGE_FALLBACK_TEMPLATE", "label": "生图失败自动用文字模板", "type": "toggle"},
@@ -1277,7 +1304,7 @@ SETTINGS_SCHEMA = [
                 "key": "DEFAULT_THEME",
                 "label": "默认排版主题",
                 "type": "select",
-                "options": list(THEMES.keys()),
+                "options": [[k, v["label"]] for k, v in THEMES.items()],
             },
             {"key": "GUI_PORT", "label": "界面端口（重启生效）"},
             {"key": "RUNS_KEEP", "label": "runs 产出保留次数（0=不清理）"},

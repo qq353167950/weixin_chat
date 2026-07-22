@@ -61,10 +61,38 @@ def asset_dir() -> Path:
 
 
 def ensure_env_file() -> Path:
-    """确保可写目录下存在 .env；首次运行从打包内置的模板复制。"""
+    """确保可写目录下存在 .env，并把新版本新增的配置键合并进去。
+
+    合并规则（升级安全）：
+      - .env 不存在 → 从内置模板整份复制
+      - .env 已存在 → 只追加模板里有而用户没有的键（带默认值），
+        用户已有的任何配置一个字不动；追加集中在文件末尾的标记区块
+    """
+    import re
+
     env = app_root() / ".env"
+    template = asset_dir() / ".env.example"
+    if not template.exists():
+        return env
+    tpl_text = template.read_text(encoding="utf-8")
     if not env.exists():
-        template = asset_dir() / ".env.example"
-        if template.exists():
-            env.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+        env.write_text(tpl_text, encoding="utf-8")
+        return env
+
+    try:
+        current = env.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        current = env.read_text(encoding="gbk", errors="replace")
+    have = set(re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", current, flags=re.M))
+    missing = [
+        (k, v)
+        for k, v in re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", tpl_text, flags=re.M)
+        if k not in have
+    ]
+    if missing:
+        lines = ["", "# ---- 新版本新增配置（自动追加，默认值可在设置页修改） ----"]
+        lines += [f"{k}={v}" for k, v in missing]
+        if not current.endswith("\n"):
+            current += "\n"
+        env.write_text(current + "\n".join(lines) + "\n", encoding="utf-8")
     return env
