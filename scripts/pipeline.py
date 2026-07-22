@@ -36,6 +36,7 @@ from article_writer import (  # noqa: E402
     llm_rank_topics,
     local_fallback_article,
     refs_to_prompt_block,
+    resolve_inline_images,
     scrub_citations,
 )
 from generate_cover_ai import generate_ai_cover  # noqa: E402
@@ -358,6 +359,17 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
         # 兜底：删掉模型偶尔塞进正文的 [[1]](url) 引用角标（公众号里显示成链接文本）
         md_text = scrub_citations(md_text)
 
+        # 写作时就地标注的配图：写完就地生图替换（图文一起出）；
+        # 未配置生图则清掉占位标记。无标记时原样返回，交给后面 _maybe_illustrate。
+        try:
+            new_md, img_report = resolve_inline_images(md_text, work_dir)
+            if new_md != md_text:
+                md_text = new_md
+                for line in img_report:
+                    print(f"  {line}")
+        except Exception as e:
+            print(f"[配图] 阶段出错（不影响正文）：{e}")
+
         # AI 腔检测：命中过多时提示重写
         hits = detect_ai_phrases(md_text)
         if hits:
@@ -423,9 +435,16 @@ def _load_search_materials(work_dir: Path) -> list[dict]:
 
 
 def _maybe_illustrate(md_path: Path, work_dir: Path) -> None:
-    """询问并执行文中教程配图（需要 IMAGE_* 生图配置）。"""
+    """为无配图的成稿补配图（询问后走旧的读全文规划方案）。
+
+    写作时已就地标注的文章，配图在写稿阶段就完成了（正文已含 images/illust-*
+    引用），这里直接跳过；只有粘贴稿/本地提纲稿这类没有配图的才询问补配。
+    """
     if os.getenv("ARTICLE_ILLUSTRATE", "1") == "0":
         return
+    md_text = md_path.read_text(encoding="utf-8")
+    if "(images/illust-" in md_text:
+        return  # 写作时已配图，无需再问
     provider = (
         os.getenv("IMAGE_PROVIDER", "") or os.getenv("COVER_PROVIDER", "")
     ).strip().lower()
@@ -433,7 +452,6 @@ def _maybe_illustrate(md_path: Path, work_dir: Path) -> None:
         return  # 模板封面模式画不了示意图
     if not yes_no("要智能配图吗？（技术文出示意图，情感/生活文出暖色氛围图）", False):
         return
-    md_text = md_path.read_text(encoding="utf-8")
     new_md, report = illustrate_article(md_text, work_dir)
     for line in report:
         print(f"  {line}")

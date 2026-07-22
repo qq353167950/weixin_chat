@@ -7,10 +7,11 @@
   llm_rank_topics          真实搜索素材 → 候选选题
   fetch_reference_articles 抓取搜索结果原文，供写作学习真人语感
   build_article_prompt     反AI腔写作提示词（禁用词表 + 句式约束）
-  local_fallback_article   写作模型不可用时的本地提纲稿
-  detect_ai_phrases        成稿 AI 腔检测
-  plan_illustrations       大模型规划文中配图点位
-  illustrate_article       生成教程示意图并插入 Markdown
+  local_fallback_article    写作模型不可用时的本地提纲稿
+  detect_ai_phrases         成稿 AI 腔检测
+  resolve_inline_images     扫描写作时标注的 gen: 占位标记，逐个生图替换（首选）
+  plan_illustrations        无占位标记时读全文规划配图点位（兜底）
+  illustrate_article        统一入口：有标记走扫描、无标记走规划
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from http_util import with_session
 from llm_client import llm_chat, llm_json
+from task_hooks import check_cancelled, report_progress
 
 # ---------------- AI 腔禁用词（提示词约束 + 成稿检测双用） ----------------
 AI_BANNED = [
@@ -267,9 +269,21 @@ def build_article_prompt(
         "15) 正文禁止出现任何网址链接、[[1]] 式引用角标、参考来源标注；"
         "素材内容消化后用自己的话写出来即可\n"
         "\n"
+        "【配图（写作时就地标注，非常重要）】\n"
+        "16) 写正文的同时，在你觉得最该配图的位置，单独占一行插入图片占位标记：\n"
+        "    ![中文图注](gen:类型;英文生图提示词)\n"
+        "    - 类型二选一：diagram=流程/结构/步骤/对比示意图（技术、干货、工具类用）；"
+        "mood=暖色氛围图（情感、生活、成长、故事类用）\n"
+        "    - 图注：一句中文，≤16 字概括这张图；mood 氛围图图注可留空\n"
+        "    - 英文提示词：描述画面元素与构图；若是流程图/结构图需要文字标签，"
+        "可在提示词里直接写出要显示的标签词\n"
+        "17) 配几张、插在哪，你按内容自己判断：一般 2-3 张，插在对应小标题或"
+        "该段落之后独占一行；内容确实不适合配图（纯观点短文）就一张都不插\n"
+        "18) 占位标记只用上面这一种格式，src 必须以 gen: 开头；不要写任何真实网址或本地路径\n"
+        "\n"
         "【输出】\n"
-        "16) 全文 1800-2500 字；只输出文章 Markdown，不要任何解释和分析过程\n"
-        "17) 不要照搬搜索素材原句，必须原创"
+        "19) 全文 1800-2500 字；只输出文章 Markdown，不要任何解释和分析过程\n"
+        "20) 不要照搬搜索素材原句，必须原创"
     )
     user = (
         f"文章类型：{topic.get('type', '干货文')}\n"
@@ -381,8 +395,8 @@ def plan_illustrations(md_text: str, max_n: int = 3) -> list[dict]:
         "images 每个元素字段：\n"
         "anchor: 图插在哪一行之后（原样复制文中该行完整文本，别改字）\n"
         "caption: 中文图注一句话；mood 氛围图留空字符串\n"
-        "prompt_en: 英文生图提示词。diagram 描述图表元素与构图；"
-        "mood 描述画面场景、光线、氛围。都绝对不要出现任何文字内容\n"
+        "prompt_en: 英文生图提示词。diagram 描述图表元素与构图，"
+        "需要文字标签时可直接写出标签词；mood 描述画面场景、光线、氛围\n"
         "kind: diagram 或 mood\n\n"
         f"文章：\n{md_text[:6000]}\n"
     )
@@ -430,16 +444,15 @@ def gen_illustration(prompt_en: str, out_path: Path, kind: str = "diagram") -> P
             f"{prompt_en} "
             "Soft golden light, cozy gentle atmosphere, muted warm palette, "
             "painterly texture, emotional and comforting, film-photo mood, "
-            "high quality, NO text, NO letters, NO Chinese characters, NO numbers, "
-            "no watermark, no logo."
+            "high quality, no watermark, no logo."
         )[:1800]
     else:
         full_prompt = (
             "Clean flat-design instructional illustration for a Chinese blog article. "
             f"{prompt_en} "
-            "Soft modern colors, simple shapes, generous whitespace, infographic feel, "
-            "high quality, NO text, NO letters, NO Chinese characters, NO numbers, "
-            "no watermark, no logo."
+            "Fresh teal-green and mint color scheme with soft neutral background, "
+            "simple rounded shapes, generous whitespace, modern infographic feel, "
+            "high quality, no watermark, no logo."
         )[:1800]
     if provider in {"openai", "oai", "dalle", "dall-e"}:
         img = gen_openai(full_prompt)
@@ -478,14 +491,126 @@ def illustrate_article(
     max_n: int | None = None,
     log=print,
 ) -> tuple[str, list[str]]:
-    """为文章智能配图。返回 (新 Markdown, 报告行)。
+    """为文章配图。返回 (新 Markdown, 报告行)。
 
-    技术文只画真示意图（没有就不配）；情感/生活文配暖色氛围图。
+    两条路径：
+      1) 正文里有写作时就地标注的 gen: 占位标记 → 扫描逐个生图替换（首选，
+         位置由写作模型决定，图文天然对齐，无需事后猜锚点）。
+      2) 没有占位标记（粘贴稿/本地提纲稿）→ 退化到旧的 plan_illustrations
+         「读全文猜锚点」方案作兜底。
+
     图片存 work_dir/images/，Markdown 相对路径引用；
     发布时由 content_images.replace_content_images 统一转微信图床。
     """
     if max_n is None:
         max_n = int(os.getenv("ARTICLE_MAX_IMAGES", "3") or 3)
+    if _GEN_IMG_RE.search(md_text):
+        return resolve_inline_images(md_text, work_dir, max_n=max_n, log=log)
+    return _illustrate_by_planning(md_text, work_dir, max_n=max_n, log=log)
+
+
+# 写作时就地标注的图片占位：![图注](gen:类型;英文提示)。类型缺省按 diagram。
+_GEN_IMG_RE = re.compile(r"!\[([^\]]*)\]\(\s*gen:([^)]*)\)", re.I)
+
+
+def _parse_gen_target(raw: str) -> tuple[str, str]:
+    """解析 gen: 标记体 → (kind, prompt_en)。无显式类型时按 diagram 处理。"""
+    body = raw.strip()
+    kind = "diagram"
+    prompt = body
+    if ";" in body:
+        head, rest = body.split(";", 1)
+        head = head.strip().lower()
+        if head in {"diagram", "mood"}:
+            kind, prompt = head, rest.strip()
+    return kind, prompt
+
+
+def _image_gen_available() -> bool:
+    """当前配置是否支持文生图（模板/本地封面模式画不了配图）。"""
+    if os.getenv("ARTICLE_ILLUSTRATE", "1") == "0":
+        return False
+    provider = (
+        os.getenv("IMAGE_PROVIDER", "") or os.getenv("COVER_PROVIDER", "")
+    ).strip().lower()
+    return provider not in {"", "template", "local", "pil"}
+
+
+def resolve_inline_images(
+    md_text: str,
+    work_dir: Path,
+    *,
+    max_n: int | None = None,
+    log=print,
+) -> tuple[str, list[str]]:
+    """把正文里的 gen: 占位标记逐个生图替换成本地图片引用。
+
+    - 无生图配置或已关闭配图：把标记干净移除（绝不给正文留破图链接）。
+    - 超过 max_n 的多余标记：同样移除，只保留前 max_n 张。
+    - 单张生图失败：移除该标记并记录，不影响其余与成稿。
+    """
+    if max_n is None:
+        max_n = int(os.getenv("ARTICLE_MAX_IMAGES", "3") or 3)
+    report: list[str] = []
+    total = len(_GEN_IMG_RE.findall(md_text))
+    if not total:
+        return md_text, report
+
+    if not _image_gen_available():
+        report.append(f"[配图] 未配置生图（或已关闭），移除 {total} 个占位标记")
+        return _strip_gen_markers(md_text), report
+
+    log(f"正在按写作标注生成配图（共 {total} 处）…")
+    img_dir = work_dir / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    seq = {"n": 0, "done": 0}
+
+    def _repl(m: re.Match) -> str:
+        check_cancelled()
+        caption = (m.group(1) or "").strip()
+        kind, prompt_en = _parse_gen_target(m.group(2))
+        if not prompt_en:
+            return ""  # 空提示词：无法生图，清除标记
+        seq["n"] += 1
+        idx = seq["n"]
+        if idx > max_n:
+            report.append(f"[配图] 超出上限 {max_n} 张，跳过：{caption or prompt_en[:20]}")
+            return ""
+        try:
+            log(f"生成配图 {idx}/{min(total, max_n)}：{caption or prompt_en[:20]}")
+            report_progress(f"生成配图 {idx}/{min(total, max_n)}")
+            out = img_dir / f"illust-{idx}.jpg"
+            gen_illustration(prompt_en, out, kind=kind)
+            seq["done"] += 1
+            report.append(f"[配图] 已生成：{caption or out.name}")
+            return f"![{caption}](images/illust-{idx}.jpg)"
+        except Exception as e:
+            report.append(f"[配图] 第{idx}张失败，移除占位：{e}")
+            return ""
+
+    new_md = _GEN_IMG_RE.sub(_repl, md_text)
+    # 清标记后可能留下空行堆积，收敛成最多一个空行
+    new_md = re.sub(r"\n{3,}", "\n\n", new_md)
+    report.append(f"[配图] 完成 {seq['done']}/{min(total, max_n)} 张")
+    return new_md, report
+
+
+def _strip_gen_markers(md_text: str) -> str:
+    """移除所有 gen: 占位标记并收敛多余空行。"""
+    return re.sub(r"\n{3,}", "\n\n", _GEN_IMG_RE.sub("", md_text))
+
+
+def _illustrate_by_planning(
+    md_text: str,
+    work_dir: Path,
+    *,
+    max_n: int,
+    log=print,
+) -> tuple[str, list[str]]:
+    """兜底：正文没有 gen: 标记时，读全文规划锚点再配图（旧方案）。
+
+    技术文只画真示意图（没有就不配）；情感/生活文配暖色氛围图。
+    """
     report: list[str] = []
     log("正在分析文章类型与配图点位…")
     plans = plan_illustrations(md_text, max_n=max_n)
@@ -503,6 +628,7 @@ def illustrate_article(
     done = 0
     for i, plan in enumerate(plans, 1):
         try:
+            check_cancelled()
             log(f"生成配图 {i}/{len(plans)}：{plan['caption'] or plan['anchor'][:20]}")
             out = img_dir / f"illust-{i}.jpg"
             gen_illustration(plan["prompt_en"], out, kind=plan.get("kind", "diagram"))

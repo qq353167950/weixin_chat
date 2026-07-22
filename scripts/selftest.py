@@ -8,6 +8,8 @@
   4. 预览页生成
   5. 本地模板封面（Pillow，不联网）
   6. 正文图片统计（不实际上传）
+  7. 写作时就地配图：gen: 占位标记的生成/替换/超限裁剪/未配置时清标记（生图打桩）
+  8. 序号小标题不叠加 01 徽章
 
 运行：
   python scripts/selftest.py
@@ -239,6 +241,64 @@ def test_strip_fence() -> None:
     check("内部真代码块不动", _strip_outer_fence(inner) == inner)
 
 
+def test_inline_images() -> None:
+    print("[12] 写作时就地配图（gen: 占位标记）")
+    import os
+
+    import article_writer as aw
+
+    sample = (
+        "# 标题\n\n引言。\n\n"
+        "![漏斗图](gen:diagram;a flat teal funnel)\n\n"
+        "## 第一节\n\n正文。\n\n"
+        "![](gen:mood;warm cozy scene)\n\n"
+        "![多余](gen:diagram;extra)\n"
+    )
+    # 未配置生图 → 清标记，绝不留破图
+    os.environ["ARTICLE_ILLUSTRATE"] = "1"
+    os.environ.pop("IMAGE_PROVIDER", None)
+    os.environ.pop("COVER_PROVIDER", None)
+    with tempfile.TemporaryDirectory() as d:
+        md, _ = aw.resolve_inline_images(sample, Path(d), log=lambda *a: None)
+    check("未配置生图时清除所有占位", "gen:" not in md and "![" not in md)
+
+    # 生图可用（打桩）→ 生成/替换/超限裁剪
+    os.environ["IMAGE_PROVIDER"] = "openai"
+    os.environ["ARTICLE_MAX_IMAGES"] = "2"
+    calls: list[str] = []
+    orig = aw.gen_illustration
+
+    def fake_gen(prompt_en, out_path, kind="diagram"):
+        calls.append(kind)
+        out_path.write_bytes(b"x")
+        return out_path
+
+    aw.gen_illustration = fake_gen
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            md, _ = aw.resolve_inline_images(sample, Path(d), log=lambda *a: None)
+    finally:
+        aw.gen_illustration = orig
+    check("受 max_n 约束只生成 2 张", len(calls) == 2, f"实际 {len(calls)}")
+    check("类型解析 diagram/mood", calls == ["diagram", "mood"], str(calls))
+    check("替换为本地图片引用", "images/illust-1.jpg" in md and "images/illust-2.jpg" in md)
+    check("超限的第 3 张被清除", "images/illust-3.jpg" not in md and "gen:" not in md)
+
+
+def test_ordinal_heading() -> None:
+    print("[13] 序号小标题不叠加 01 徽章")
+    body = (
+        "## 第一节：写文\n\n正文。\n\n"
+        "## 普通小标题\n\n正文。\n\n"
+        "## 3. 步骤三\n\n正文。\n"
+    )
+    html = markdown_to_wechat_html(body, theme="default")
+    # badge 序号胶囊的特征片段
+    badges = html.count("padding:3px 10px;")
+    check("仅普通小标题带徽章", badges == 1, f"徽章数 {badges}")
+    check("序号标题走左色条", html.count("border-left:4px solid") >= 2)
+
+
 def main() -> int:
     print("=" * 56)
     print("  本地冒烟自测（离线，不调用外部 API）")
@@ -256,6 +316,8 @@ def main() -> int:
         test_friendly_changelog,
         test_wechat_errcode,
         test_strip_fence,
+        test_inline_images,
+        test_ordinal_heading,
     ]
     for t in tests:
         try:

@@ -46,6 +46,7 @@ from article_writer import (  # noqa: E402
     llm_rank_topics,
     local_fallback_article,
     refs_to_prompt_block,
+    resolve_inline_images,
     scrub_citations,
 )
 from content_images import count_external_images, replace_content_images  # noqa: E402
@@ -825,6 +826,17 @@ def api_article_write():
             md_text = f"# {topic['title']}\n\n{md_text}"
         # 兜底：清掉模型塞进正文的引用角标链接
         md_text = scrub_citations(md_text)
+        # 写作时就地标注的配图：同一任务内直接生图替换（图文一起出）；
+        # 未配置生图则把占位标记清掉，正文不留破图链接
+        img_report: list[str] = []
+        try:
+            md_text, img_report = resolve_inline_images(md_text, wd, log=log)
+            for line in img_report:
+                log(line)
+        except TaskCancelledHook:
+            raise
+        except Exception as e:
+            log(f"配图阶段出错（不影响正文）：{e}")
         (wd / "article.md").write_text(md_text, encoding="utf-8")
         hits = detect_ai_phrases(md_text)
         if hits:
@@ -832,7 +844,7 @@ def api_article_write():
         else:
             log("AI腔检测：干净")
         log(f"完成，共 {len(md_text)} 字")
-        return {"chars": len(md_text), "ai_hits": hits}
+        return {"chars": len(md_text), "ai_hits": hits, "images": img_report}
 
     task = _run_task("生成文章", job)
     return jsonify({"task": task["id"]})

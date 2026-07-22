@@ -155,6 +155,16 @@ _IMG_LINE_RE = re.compile(r'^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$')
 _OL_ITEM_RE = re.compile(r"^(\d+)[.、)]\s+(.+)$")
 _UL_ITEM_RE = re.compile(r"^[-*+]\s+(.+)$")
 _TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$")
+# 小标题自带序号：第X节/章/部分/步、一、、1.、（一）、(1) 等，命中则不叠加 01 徽章
+_ORDINAL_H2_RE = re.compile(
+    r"^\s*(?:"
+    r"第\s*[0-9一二三四五六七八九十百零两]+\s*[节章部分步条讲课]"
+    r"|[0-9]{1,2}\s*[、.．)）]"
+    r"|[一二三四五六七八九十]+\s*[、.．)）]"
+    r"|（\s*[0-9一二三四五六七八九十]+\s*）"
+    r"|\(\s*[0-9]+\s*\)"
+    r")"
+)
 
 
 class _Renderer:
@@ -286,6 +296,14 @@ class _Renderer:
         num = f"{self.h2_count:02d}"
         mode = self.t["h2_mode"]
         inner = self.inline(text)
+        # 小标题本身已带序号（第一节 / 一、/ 1. 等）→ 不再叠加 01 徽章，
+        # 改用左色条统一收口，避免「01 第一节」这类重复
+        if _ORDINAL_H2_RE.match(text):
+            return (
+                f'<h2 style="margin:32px 0 16px;font-size:18px;font-weight:700;'
+                f'color:{self.t["h2_color"]};border-left:4px solid {self.t["accent"]};'
+                f'padding-left:12px;line-height:1.5;">{inner}</h2>'
+            )
         if mode == "center":
             return (
                 '<h2 style="margin:36px 0 18px;text-align:center;font-weight:400;">'
@@ -347,11 +365,11 @@ class _Renderer:
 
     def blockquote(self, lines: list[str]) -> str:
         body = "<br>".join(self.inline(x) for x in lines)
-        # 卡片式金句：大引号装饰 + 圆角 + 主题色细线
+        # 卡片式金句：大引号装饰 + 全圆角 + 主题色细线（贴近公众号常见绿色卡片）
         return (
-            f'<blockquote style="margin:20px 0;padding:14px 18px 16px;'
+            f'<blockquote style="margin:20px 0;padding:16px 18px 18px;'
             f'border-left:4px solid {self.t["quote_border"]};background:{self.t["quote_bg"]};'
-            f'border-radius:0 12px 12px 0;font-size:15px;line-height:1.9;">'
+            f'border-radius:12px;font-size:15px;line-height:1.9;">'
             f'<span style="display:block;font-size:26px;line-height:1;'
             f'color:{self.t["quote_border"]};font-family:Georgia,serif;'
             f'margin-bottom:2px;">❝</span>'
