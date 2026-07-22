@@ -510,10 +510,10 @@ def api_update_install():
     exe_dir = Path(sys.executable).resolve().parent
     new_exe = exe_dir / "公众号助手.exe"
     bat = ROOT / "update" / "run_update.bat"
-    # 装在 Program Files 时静默安装需要管理员：用 PowerShell RunAs 显式提权
-    # （否则 Inno 返回错误码 5 拒绝访问）；UAC 弹窗由用户确认。
-    # ArgumentList 单引号项含空格时 PS 会自动加引号传递，Inno 能正确解析 /DIR
-    ps_cmd = (
+    # v1.7.3 起安装包为用户级（PrivilegesRequired=lowest），写用户目录无需提权；
+    # 若旧版装在 Program Files（管理员位置），静默写入会被拒（错误码 5），
+    # 此时降级提权重试一次（仅这种历史遗留场景会弹 UAC）
+    ps_elevate = (
         "$ErrorActionPreference='Stop'; "
         f"$p = Start-Process -FilePath '{installer}' "
         "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
@@ -523,12 +523,17 @@ def api_update_install():
     # cmd 按系统本地码页（中文 Windows=GBK）解析 bat，UTF-8 中文路径会乱码
     bat.write_text(
         "@echo off\r\n"
-        "echo Installing update, a UAC prompt may appear - please click Yes.\r\n"
-        f'powershell -NoProfile -Command "{ps_cmd}"\r\n'
+        "echo Installing update, please wait...\r\n"
+        f'"{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
+        f'/CLOSEAPPLICATIONS /NOCANCEL /DIR="{exe_dir}"\r\n'
         "if errorlevel 1 (\r\n"
-        "  echo Install failed, error code %errorlevel%. Please download manually from GitHub.\r\n"
-        "  pause\r\n"
-        "  exit /b 1\r\n"
+        "  echo Retrying with administrator rights - please click Yes if prompted.\r\n"
+        f'  powershell -NoProfile -Command "{ps_elevate}"\r\n'
+        "  if errorlevel 1 (\r\n"
+        "    echo Install failed, error code %errorlevel%. Please download manually from GitHub.\r\n"
+        "    pause\r\n"
+        "    exit /b 1\r\n"
+        "  )\r\n"
         ")\r\n"
         f'start "" "{new_exe}"\r\n',
         encoding="gbk", errors="replace",

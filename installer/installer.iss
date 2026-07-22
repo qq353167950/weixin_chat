@@ -22,6 +22,8 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
+; 用户级安装（同 Chrome/VS Code）：装到当前用户目录，安装与更新全程无 UAC
+PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -37,8 +39,6 @@ WizardStyle=modern
 ; 安装时自动关闭正在运行的程序（内置更新依赖此项接管旧进程）
 CloseApplications=yes
 RestartApplications=no
-; 非管理员也可安装（选不了 Program Files 时装用户目录）
-PrivilegesRequiredOverridesAllowed=dialog
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
