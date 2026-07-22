@@ -229,11 +229,18 @@ def _prune_runs(keep: int | None = None) -> None:
 
 
 def _ensure_run() -> Path:
-    """确保存在本次产出目录（与命令行 pipeline 的 runs/<stamp> 一致）。"""
+    """确保存在本次产出目录（与命令行 pipeline 的 runs/<stamp> 一致）。
+
+    同一秒内连续开新 run 时时间戳会撞名，追加序号避免落回旧目录。
+    """
     with _LOCK:
         if STATE["work_dir"] is None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             wd = ROOT / "runs" / stamp
+            n = 1
+            while wd.exists():
+                n += 1
+                wd = ROOT / "runs" / f"{stamp}-{n}"
             wd.mkdir(parents=True, exist_ok=True)
             STATE["work_dir"] = wd
             _prune_runs()
@@ -538,7 +545,7 @@ def api_runs():
 @app.get("/api/runs/cover/<name>")
 def api_runs_cover(name: str):
     """历史列表的封面缩略图（仅限时间戳目录名，防路径穿越）。"""
-    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{1,3})?", name):
         return jsonify({"error": "无效的记录名"}), 400
     d = ROOT / "runs" / name
     if not (d / "cover.jpg").exists():
@@ -550,7 +557,7 @@ def api_runs_cover(name: str):
 def api_runs_delete():
     """删除一条历史产出（整个 runs/<stamp> 目录）。当前正在编辑的不允许删。"""
     name = str((request.get_json(force=True) or {}).get("run") or "").strip()
-    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{1,3})?", name):
         return jsonify({"error": "无效的记录名"}), 400
     wd = ROOT / "runs" / name
     if not wd.is_dir():
@@ -571,7 +578,7 @@ def api_runs_open():
     """重新打开历史产出：恢复文章/封面/选题到当前会话，可继续编辑或重新发布。"""
     name = str((request.get_json(force=True) or {}).get("run") or "").strip()
     # 目录名只允许时间戳格式，防止路径穿越
-    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", name):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{1,3})?", name):
         return jsonify({"error": "无效的记录名"}), 400
     wd = ROOT / "runs" / name
     if not wd.is_dir():
@@ -651,6 +658,19 @@ def api_topics_select():
         "refs": str(body.get("refs") or ""),
         "user_extra": str(body.get("user_extra") or ""),
     }
+    # 换了选题且当前 run 已有产出（文章/封面）→ 开新 run，
+    # 旧产出原样留在历史里；避免新选题却显示旧文章旧封面
+    switched = False
+    with _LOCK:
+        old = STATE["topic"]
+        wd0 = STATE["work_dir"]
+        has_output = bool(
+            wd0 and ((Path(wd0) / "article.md").exists() or (Path(wd0) / "cover.jpg").exists())
+        )
+        if old and old.get("title") != title and has_output:
+            # 保留候选选题列表，其余会话状态重置
+            STATE.update({"work_dir": None, "cover": False, "publish": None})
+            switched = True
     wd = _ensure_run()
     with _LOCK:
         STATE["topic"] = topic
@@ -658,7 +678,7 @@ def api_topics_select():
     (wd / "topic.json").write_text(
         json.dumps(topic, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return jsonify({"topic": topic})
+    return jsonify({"topic": topic, "new_run": switched})
 
 
 # ---------------- 文章 ----------------
@@ -748,6 +768,67 @@ def api_article_save():
     wd = _ensure_run()
     (wd / "article.md").write_text(md_text, encoding="utf-8")
     return jsonify({"ok": True, "ai_hits": detect_ai_phrases(md_text)})
+
+
+@app.post("/api/article/check_ai")
+def api_article_check_ai():
+    """手动触发 AI 味检测（对编辑器当前内容，不落盘）。"""
+    md_text = str((request.get_json(force=True) or {}).get("md") or "")
+    if not md_text.strip():
+        return jsonify({"error": "内容为空"}), 400
+    return jsonify({"ai_hits": detect_ai_phrases(md_text)})
+
+
+@app.post("/api/article/deai")
+def api_article_deai():
+    """一键去 AI 味：让写作模型重写命中 AI 腔的表达，保持内容与结构不变。"""
+    busy = _reject_if_busy()
+    if busy:
+        return busy
+    md = _article_path()
+    if not md:
+        return jsonify({"error": "还没有文章"}), 400
+    wd = _ensure_run()
+
+    def job(log):
+        md_text = md.read_text(encoding="utf-8")
+        hits = detect_ai_phrases(md_text)
+        if not hits:
+            log("当前没有检测到 AI 腔用词，无需处理")
+            return {"ai_hits": [], "changed": False}
+        log(f"检测到 {len(hits)} 个 AI 腔用词：{'、'.join(hits[:8])}")
+        log("正在让写作模型润色去味（保持内容不变）…")
+        system = (
+            "你是资深编辑，任务是把文章里的 AI 腔表达改写得像真人写的。\n"
+            "【只做这一件事】替换下列 AI 腔用词及其所在句子的表达方式，"
+            "其余内容一个字都不要改：不要增删段落，不要改标题，"
+            "不要改数字与事实，不要改 Markdown 结构与图片链接。\n"
+            f"需要处理的用词：{'、'.join(hits)}\n"
+            "改写原则：口语自然、有具体感；禁止用其他 AI 腔词替代。\n"
+            "只输出改写后的完整 Markdown 全文，不要任何解释。"
+        )
+        new_md = llm_chat(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": md_text}],
+            temperature=0.4,
+        )
+        new_md = _strip_outer_fence(new_md)
+        new_md = scrub_citations(new_md)
+        # 安全阀：长度骤降说明模型丢内容，拒绝采用
+        if len(new_md) < len(md_text) * 0.7:
+            raise RuntimeError(
+                f"改写后长度异常（{len(md_text)}→{len(new_md)} 字），已放弃本次结果，原文未动"
+            )
+        md.write_text(new_md, encoding="utf-8")
+        left = detect_ai_phrases(new_md)
+        if left:
+            log(f"完成。残留 {len(left)} 个：{'、'.join(left[:6])}（可再点一次）")
+        else:
+            log("完成，AI 腔已清零 ✓")
+        return {"ai_hits": left, "changed": True}
+
+    task = _run_task("去除AI味", job)
+    return jsonify({"task": task["id"]})
 
 
 @app.post("/api/article/illustrate")

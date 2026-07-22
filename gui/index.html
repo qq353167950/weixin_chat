@@ -26,6 +26,9 @@
     --shadow-hover: 0 8px 32px rgba(0,0,0,0.10);
   }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  /* 正文内容允许选中复制（编辑器/预览区/手机预览） */
+  .live-preview, .live-preview *, #md-editor, .phone iframe,
+  #pub-title, #pub-digest { user-select: text; -webkit-user-select: text; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC",
                  "Helvetica Neue", "Microsoft YaHei", sans-serif;
@@ -164,8 +167,17 @@
     font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
     padding: 14px 16px; max-height: 220px; overflow-y: auto; line-height: 1.8;
     display: none; white-space: pre-wrap; word-break: break-all;
+    user-select: text; -webkit-user-select: text;   /* 日志可选中复制 */
+    position: relative;
   }
   .console.show { display: block; }
+  .console .copy-log-btn {
+    position: sticky; top: 0; float: right; margin-left: 8px;
+    border: none; background: rgba(255,255,255,0.12); color: #e8e8ed;
+    font-family: inherit; font-size: 11px; padding: 3px 10px;
+    border-radius: 980px; cursor: pointer; opacity: .7;
+  }
+  .console .copy-log-btn:hover { opacity: 1; background: rgba(255,255,255,0.2); }
   .console .err { color: #ff6961; }
   .console .okline { color: #6fdd8b; }
 
@@ -223,14 +235,15 @@
   }
   .toggle-row .cap { font-size: 13px; color: var(--text); }
 
-  /* toast */
+  /* toast（可点击复制内容） */
   #toast {
     position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px);
     background: rgba(29,29,31,0.92); color: #fff; font-size: 14px;
     padding: 12px 24px; border-radius: 980px; opacity: 0; pointer-events: none;
     transition: all .3s; z-index: 200; backdrop-filter: blur(10px);
+    max-width: 80vw; cursor: pointer;
   }
-  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 
   .spinner {
     width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.35);
@@ -330,6 +343,13 @@
     transition: opacity .15s;
   }
   .eye-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+
+  .mini-btn {
+    border: none; background: rgba(0,0,0,0.06); color: var(--text);
+    font-family: inherit; font-size: 11px; padding: 4px 10px;
+    border-radius: 980px; cursor: pointer;
+  }
+  .mini-btn:hover { background: rgba(0,0,0,0.1); }
 
   /* 历史列表 */
   .run-row {
@@ -536,6 +556,8 @@
         <button class="btn" id="btn-write">大模型写作</button>
         <button class="btn secondary" id="btn-rewrite" style="display:none">换个写法重写</button>
         <button class="btn ghost" id="btn-illustrate" style="display:none">智能配图（技术文出示意图 / 情感文出氛围图）</button>
+        <button class="btn ghost" id="btn-check-ai" style="display:none">检测 AI 味</button>
+        <button class="btn danger" id="btn-deai" style="display:none">一键去 AI 味</button>
       </div>
       <div style="height:12px"></div>
       <div class="console" id="log-article"></div>
@@ -586,7 +608,10 @@
         <div class="live-wrap">
           <div class="live-head">
             <span>最终效果（微信排版实时渲染）</span>
-            <span class="theme-seg mini" id="theme-seg-editor"></span>
+            <span class="row" style="gap:6px">
+              <button class="mini-btn" id="btn-copy-rich" title="复制排版后内容（可直接粘贴进公众号编辑器）">复制排版</button>
+              <span class="theme-seg mini" id="theme-seg-editor"></span>
+            </span>
           </div>
           <div class="live-preview" id="live-preview"><p class="muted" style="padding:20px">加载中…</p></div>
         </div>
@@ -809,6 +834,14 @@ function toast(msg, ms = 2600) {
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove("show"), ms);
 }
+/* toast 可点击复制内容（保存/上传报错时直接复制错误信息） */
+$("#toast").addEventListener("click", async () => {
+  const text = $("#toast").textContent;
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); } catch (_) {}
+  $("#toast").textContent = "已复制 ✓";
+  setTimeout(() => $("#toast").classList.remove("show"), 800);
+});
 
 async function api(path, opts = {}) {
   // 所有普通接口 20s 超时：服务假死时不再永久转圈（任务轮询单独长跑）
@@ -835,7 +868,8 @@ async function api(path, opts = {}) {
 
 /* 全局忙碌门控：有后台任务时禁用所有「启动类」按钮，防误触发 409 */
 const BUSY_BTNS = ["btn-search", "btn-custom", "btn-write", "btn-rewrite",
-                   "btn-illustrate", "btn-cover-ai", "btn-cover-template", "btn-publish"];
+                   "btn-illustrate", "btn-cover-ai", "btn-cover-template", "btn-publish",
+                   "btn-deai"];
 let BUSY = false;
 function setBusy(v) {
   BUSY = v;
@@ -867,6 +901,21 @@ function askConfirm(title, text) {
 async function watchTask(taskId, consoleEl, btn, { cancellable = true } = {}) {
   consoleEl.classList.add("show");
   consoleEl.innerHTML = "";
+  // 右上角「复制日志」：报错时可整段复制去反馈
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-log-btn";
+  copyBtn.textContent = "复制日志";
+  copyBtn.onclick = async () => {
+    const text = consoleEl.innerText.replace(/^复制日志\s*/, "").trim();
+    try { await navigator.clipboard.writeText(text); toast("日志已复制"); }
+    catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand("copy"); ta.remove();
+      toast("日志已复制");
+    }
+  };
+  consoleEl.appendChild(copyBtn);
   let shown = 0;
   let cancelLine = null;
   // 实时进度行（原地刷新，区别于追加式日志）
@@ -1096,9 +1145,15 @@ function renderTopics(topics) {
     div.addEventListener("click", async () => {
       $$(".topic-card").forEach(c => c.classList.remove("selected"));
       div.classList.add("selected");
-      await api("/api/topics/select", { method: "POST", body: t });
-      $("#btn-goto-article").disabled = false;
+      const rs = await api("/api/topics/select", { method: "POST", body: t });
       await refreshState();
+      if (rs.new_run) {
+        resetUiForRun();
+        // 切换选题场景：候选列表和下一步按钮要保留
+        $("#topics-card").style.display = "";
+        toast("已切换新选题，旧文章已存入历史");
+      }
+      $("#btn-goto-article").disabled = false;
     });
     list.appendChild(div);
   });
@@ -1108,11 +1163,12 @@ function renderTopics(topics) {
 $("#btn-custom").addEventListener("click", async () => {
   const title = $("#in-custom-title").value.trim();
   if (!title) return toast("请先填主题");
-  await api("/api/topics/select", { method: "POST", body: {
+  const rs = await api("/api/topics/select", { method: "POST", body: {
     title, angle: $("#in-custom-angle").value, type: $("#in-custom-type").value,
   }});
   await refreshState();
-  toast("已选定主题");
+  if (rs.new_run) { resetUiForRun(); toast("已切换新选题，旧文章已存入历史"); }
+  else toast("已选定主题");
   nav("article");
 });
 $("#btn-goto-article").addEventListener("click", () => nav("article"));
@@ -1135,6 +1191,7 @@ async function loadArticle() {
   $("#art-chars").textContent = `${md.length} 字`;
   $("#btn-rewrite").style.display = "";
   $("#btn-illustrate").style.display = "";
+  $("#btn-check-ai").style.display = "";
   setDirty(false);
   showAiChip(S.ai_hits || []);
   renderThemeSegEditor();
@@ -1147,11 +1204,39 @@ function showAiChip(hits) {
   if (hits.length) {
     chip.className = "chip warn";
     chip.textContent = `AI腔 ${hits.length} 处：${hits.slice(0, 4).join("、")}`;
+    $("#btn-deai").style.display = "";      // 有命中才亮出一键去味
   } else {
     chip.className = "chip ok";
     chip.textContent = "AI腔检测通过";
+    $("#btn-deai").style.display = "none";
   }
 }
+
+/* 手动检测 AI 味（对编辑器当前内容） */
+$("#btn-check-ai").addEventListener("click", async () => {
+  const md = $("#md-editor").value;
+  if (!md.trim()) { toast("还没有文章内容"); return; }
+  try {
+    const r = await api("/api/article/check_ai", { method: "POST", body: { md }});
+    showAiChip(r.ai_hits || []);
+    toast(r.ai_hits.length ? `检测到 ${r.ai_hits.length} 处 AI 腔` : "检测通过，没有 AI 腔 ✓");
+  } catch (e) { toast("检测失败：" + e.message, 3500); }
+});
+
+/* 一键去 AI 味：先保存再让模型润色 */
+$("#btn-deai").addEventListener("click", async () => {
+  if (MD_DIRTY) {
+    const ok = await saveArticle({ silent: true });
+    if (!ok) return;
+  }
+  try {
+    const { task } = await api("/api/article/deai", { method: "POST", body: {} });
+    const r = await watchTask(task, $("#log-article"), $("#btn-deai"));
+    await loadArticle();
+    showAiChip(r.ai_hits || []);
+    toast(r.changed ? "去味完成" : "本来就很干净");
+  } catch (e) { toast("失败：" + e.message, 4000); }
+});
 
 async function writeArticle(extraHint) {
   if (!S.topic) { toast("请先选定选题"); return nav("topic"); }
@@ -1206,6 +1291,29 @@ $("#md-editor").addEventListener("input", () => {
   setDirty(true);
   $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
   scheduleLivePreview();
+});
+
+/* 复制排版后内容：富文本进剪贴板，可直接粘贴进公众号编辑器 */
+$("#btn-copy-rich").addEventListener("click", async () => {
+  const node = $("#live-preview");
+  if (!node.innerText.trim()) { toast("先写点内容再复制"); return; }
+  try {
+    const blob = new Blob([node.innerHTML], { type: "text/html" });
+    const plain = new Blob([node.innerText], { type: "text/plain" });
+    await navigator.clipboard.write([
+      new ClipboardItem({ "text/html": blob, "text/plain": plain }),
+    ]);
+    toast("已复制排版内容，可直接粘贴到公众号编辑器");
+  } catch (_) {
+    // 兜底：选中节点走 execCommand
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    document.execCommand("copy");
+    sel.removeAllRanges();
+    toast("已复制排版内容");
+  }
 });
 
 /* 编辑页内的主题切换（与发布页共用 S.theme） */
@@ -1479,13 +1587,15 @@ function resetUiForRun() {
   ["log-topic", "log-article", "log-cover", "log-publish"].forEach(id =>
     $(`#${id}`).classList.remove("show"));
   $("#cover-box").innerHTML = "还没有封面";
-  // 文章页残留：上一篇的选题标题/AI腔标签/按钮态/字数
+  $("#live-preview").innerHTML = '<p class="muted" style="padding:20px">开始输入后这里实时显示最终排版效果</p>';
   $("#art-topic-title").textContent = "未选定选题";
   $("#art-topic-meta").textContent = "";
   $("#art-chars").textContent = "";
   $("#chip-ai").style.display = "none";
   $("#btn-rewrite").style.display = "none";
   $("#btn-illustrate").style.display = "none";
+  $("#btn-check-ai").style.display = "none";
+  $("#btn-deai").style.display = "none";
   $("#btn-goto-article").disabled = true;
   // 清掉发布页的手动修改标记，让新文章的标题/摘要能重新回填
   ["pub-title", "pub-digest", "pub-author"].forEach(id => {
@@ -1515,7 +1625,7 @@ async function loadRunsPage() {
       const row = document.createElement("div");
       row.className = "run-row";
       const stamp = r.run.replace(
-        /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}$/, "$1-$2-$3 $4:$5");
+        /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}(?:-\d+)?$/, "$1-$2-$3 $4:$5");
       // 缩略图（路径由后端校验，安全）
       if (r.has_cover) {
         const img = document.createElement("img");

@@ -121,10 +121,21 @@ def html_to_text(html: str) -> str:
     return text.strip()
 
 
-def _fetch_page_text(url: str, timeout: int = 25) -> str:
+def _fetch_page_text(url: str, timeout: int = 15) -> str:
     def _do(sess):
-        r = sess.get(url, headers=_UA_HEADERS, timeout=timeout)
+        from urllib.parse import urlsplit
+
+        # 带 Referer 走搜索引擎来路，部分站点据此放行
+        headers = dict(_UA_HEADERS)
+        headers["Referer"] = "https://www.google.com/"
+        headers["Accept"] = (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        )
+        r = sess.get(url, headers=headers, timeout=timeout, allow_redirects=True)
         r.raise_for_status()
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if ctype and "html" not in ctype and "text" not in ctype:
+            raise RuntimeError(f"非网页内容（{ctype.split(';')[0]}）")
         # 中文站点常见编码声明缺失，按内容推断
         if not r.encoding or r.encoding.lower() == "iso-8859-1":
             r.encoding = r.apparent_encoding or "utf-8"
@@ -161,12 +172,19 @@ def fetch_reference_articles(
     per_article_chars: int = 2200,
     log=print,
 ) -> list[dict]:
-    """抓取参考文章原文。单篇失败不影响整体，返回 [{title,url,text}]。"""
+    """抓取参考文章原文。逐个候选尝试直到抓够 max_n 篇。
+
+    此前只试前 max_n 个候选，命中反爬/JS 页就颗粒无收；
+    现在失败自动换下一个候选（上限 max_n*4 次尝试），并说明失败原因。
+    """
     if max_n is None:
         max_n = int(os.getenv("ARTICLE_REF_MAX", "3") or 3)
-    picked = pick_reference_materials(materials, topic, max_n)
+    candidates = pick_reference_materials(materials, topic, max_n * 4)
     out: list[dict] = []
-    for m in picked:
+    fails = 0
+    for m in candidates:
+        if len(out) >= max_n:
+            break
         url = m["url"]
         try:
             log(f"  抓取参考: {m['title'][:40]}")
@@ -175,11 +193,23 @@ def fetch_reference_articles(
             lines = [ln.strip() for ln in text.split("\n") if len(ln.strip()) >= 20]
             body = "\n".join(lines)[:per_article_chars]
             if len(body) < 200:
-                log("    正文太短，跳过")
+                log("    正文太短（可能是 JS 渲染页/反爬拦截页），换下一篇")
+                fails += 1
                 continue
             out.append({"title": m["title"], "url": url, "text": body})
         except Exception as e:
-            log(f"    抓取失败: {e}")
+            msg = str(e)
+            if "403" in msg or "Forbidden" in msg:
+                log("    该站拒绝抓取（403 反爬），换下一篇")
+            elif "404" in msg:
+                log("    页面不存在（404），换下一篇")
+            elif "timed out" in msg.lower() or "timeout" in msg.lower():
+                log("    访问超时，换下一篇")
+            else:
+                log(f"    抓取失败: {msg[:80]}，换下一篇")
+            fails += 1
+    if not out and fails:
+        log("  参考文全部抓取失败（多为站点反爬），将不带参考直接写作——不影响成稿")
     return out
 
 

@@ -341,6 +341,7 @@ def main() -> int:
             width=WINDOW_SIZE[0],
             height=WINDOW_SIZE[1],
             min_size=MIN_SIZE,
+            text_select=True,             # 允许选中/复制页面文本（预览区复制依赖）
             background_color="#f5f5f7",   # 与页面底色一致，加载时不闪白
         )
         APP.window = window
