@@ -178,7 +178,9 @@ jobs:
         run: |
           VER="${GITHUB_REF#refs/tags/}"
           # 取 RELEASE_NOTES.md 中 "## vX.Y.Z" 到下一个 "## " 之间的条目行
+          # sub(\r$) 兼容 Windows 提交的 CRLF 行尾（否则精确匹配失败）
           NOTES=$(awk -v ver="## $VER" '
+            { sub(/\r$/, "") }
             $0 == ver {found=1; next}
             found && /^## / {exit}
             found && /^- / {print}
