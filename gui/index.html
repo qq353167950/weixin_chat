@@ -2136,10 +2136,8 @@ function showUpdateDialog(info) {
         await new Promise(res => setTimeout(res, 600));
       }
       await api("/api/update/install", { method: "POST" });
-      $("#up-progress-text").textContent = "正在替换程序文件，新版本即将自动打开…";
-      setTimeout(() => {
-        document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">正在更新，新版本将自动启动，本窗口可关闭</div>';
-      }, 800);
+      $("#up-progress-text").textContent = "更新完成，正在切换到新版本…";
+      // 旧窗口随即被服务端隐藏并退出，无需额外文案
     } catch (e) {
       $("#up-progress").style.display = "none";
       $("#up-actions").style.display = "";

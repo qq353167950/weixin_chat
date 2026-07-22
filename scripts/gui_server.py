@@ -542,14 +542,30 @@ def api_update_install():
     except Exception as e:
         return jsonify({"error": f"替换失败：{e}"}), 500
 
-    # 启动新版（分离进程），随后本进程退出
-    subprocess.Popen(
-        [str(cur_exe)],
-        cwd=str(cur_exe.parent),
-        close_fds=True,
-        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
-    )
-    threading.Timer(1.0, lambda: os._exit(0)).start()
+    # 衔接顺序：先隐藏旧窗口 → 再启动新版 → 本进程退出。
+    # 否则旧窗口要等 os._exit 才消失，会出现新旧两个窗口同屏的尴尬瞬间
+    import time as _time
+
+    def _handover() -> None:
+        try:
+            import gui_app
+
+            if gui_app.APP.window is not None:
+                gui_app.APP.quitting = True     # closing 拦截放行
+                gui_app.APP.window.hide()
+        except Exception:
+            pass
+        _time.sleep(0.3)
+        subprocess.Popen(
+            [str(cur_exe)],
+            cwd=str(cur_exe.parent),
+            close_fds=True,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+        )
+        _time.sleep(0.7)
+        os._exit(0)
+
+    threading.Thread(target=_handover, daemon=True).start()
     return jsonify({"ok": True})
 
 
