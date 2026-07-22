@@ -2005,9 +2005,9 @@ function showUpdateDialog(info) {
 
   $("#up-later").onclick = () => $("#update-mask").classList.remove("show");
   $("#up-install").onclick = async () => {
-    // Windows 安装包走内置更新；其他平台/绿色版回退浏览器下载
-    const isSetup = /setup.*\.exe$/i.test(info.download_url || "");
-    if (!isSetup) {
+    // Windows 单 exe 走程序内自替换更新；其他平台回退浏览器下载
+    const isExe = /\.exe$/i.test(info.download_url || "");
+    if (!isExe) {
       if (info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.download_url } }).catch(() => window.open(info.download_url, "_blank")); }
       $("#update-mask").classList.remove("show");
       return;
@@ -2027,7 +2027,7 @@ function showUpdateDialog(info) {
         await new Promise(res => setTimeout(res, 600));
       }
       await api("/api/update/install", { method: "POST" });
-      $("#up-progress-text").textContent = "正在后台安装，完成后将自动打开新版本…";
+      $("#up-progress-text").textContent = "正在替换程序文件，新版本即将自动打开…";
       setTimeout(() => {
         document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#6e6e73;font-size:15px">正在更新，新版本将自动启动，本窗口可关闭</div>';
       }, 800);

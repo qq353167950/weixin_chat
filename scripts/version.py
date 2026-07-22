@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from typing import Literal
 
-__version__ = "1.7.4"
+__version__ = "1.7.5"
 
 GITHUB_REPO = "qq353167950/weixin_chat"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -70,9 +70,11 @@ def check_update() -> tuple[bool, str, str, str]:
         assets = data.get("assets", [])
         sys = platform.system().lower()
 
-        # 优先匹配规则（Windows 优先安装版，macOS 优先 .zip）
+        # 优先匹配规则：
+        # Windows 取绿色版单 exe（内置自替换更新用，不走安装器）；
+        # macOS 取 zip
         patterns = {
-            "windows": [r"setup.*\.exe$", r"\.exe$"],
+            "windows": [r"^wechat-assistant\.exe$", r"\.exe$"],
             "darwin": [r"macos.*\.zip$", r"\.app\.zip$", r"\.zip$"],
             "linux": [r"linux.*\.tar\.gz$", r"\.tar\.gz$"],
         }

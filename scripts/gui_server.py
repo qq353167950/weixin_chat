@@ -503,57 +503,44 @@ def api_update_progress():
 
 @app.post("/api/update/install")
 def api_update_install():
-    """静默安装新版并自动重启：由引导批处理接管，不依赖安装器隐式行为。
+    """程序内自替换更新（Chrome 模式，彻底不碰安装器/cmd/UAC）。
 
-    流程：写 update.bat → 分离启动 → 本进程退出 →
-    bat 同步跑安装器（/VERYSILENT /DIR=当前安装目录，UAC 弹窗时用户可见可点）
-    → 安装完成后按明确路径启动新版「公众号助手.exe」。
-    之前的问题：安装器分离启动后本进程立刻退出，UAC 确认框无人处理
-    导致安装从未执行；启动新版依赖完成页选项在静默下不可靠。
+    Windows 允许重命名正在运行的 exe：
+      1. 当前 exe 改名为 公众号助手.exe.old（运行中的进程不受影响）
+      2. 下载好的新版 exe 移动到当前 exe 路径
+      3. 启动新版进程，本进程退出
+      4. 新版启动时自动清理 .old（见 gui_app 启动逻辑）
+    全程纯文件操作，写自己所在目录（用户安装本来就可写），零弹窗。
     """
     with _LOCK:
         if UPDATE_STATE["status"] != "ready" or not UPDATE_STATE["file"]:
-            return jsonify({"error": "安装包未就绪"}), 400
-        installer = UPDATE_STATE["file"]
+            return jsonify({"error": "更新文件未就绪"}), 400
+        new_file = Path(UPDATE_STATE["file"])
     import subprocess
 
-    # 安装目标 = 当前 exe 所在目录（frozen）；源码运行时仅作冒烟不真装
-    exe_dir = Path(sys.executable).resolve().parent
-    new_exe = exe_dir / "公众号助手.exe"
-    bat = ROOT / "update" / "run_update.bat"
-    # v1.7.3 起安装包为用户级（PrivilegesRequired=lowest），写用户目录无需提权；
-    # 若旧版装在 Program Files（管理员位置），静默写入会被拒（错误码 5），
-    # 此时降级提权重试一次（仅这种历史遗留场景会弹 UAC）
-    ps_elevate = (
-        "$ErrorActionPreference='Stop'; "
-        f"$p = Start-Process -FilePath '{installer}' "
-        "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
-        f"'/CLOSEAPPLICATIONS','/NOCANCEL','/DIR=\\\"{exe_dir}\\\"' "
-        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
-    )
-    # cmd 按系统本地码页（中文 Windows=GBK）解析 bat，UTF-8 中文路径会乱码
-    bat.write_text(
-        "@echo off\r\n"
-        "echo Installing update, please wait...\r\n"
-        f'"{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
-        f'/CLOSEAPPLICATIONS /NOCANCEL /DIR="{exe_dir}"\r\n'
-        "if errorlevel 1 (\r\n"
-        "  echo Retrying with administrator rights - please click Yes if prompted.\r\n"
-        f'  powershell -NoProfile -Command "{ps_elevate}"\r\n'
-        "  if errorlevel 1 (\r\n"
-        "    echo Install failed, error code %errorlevel%. Please download manually from GitHub.\r\n"
-        "    pause\r\n"
-        "    exit /b 1\r\n"
-        "  )\r\n"
-        ")\r\n"
-        f'start "" "{new_exe}"\r\n',
-        encoding="gbk", errors="replace",
-    )
-    # 控制台窗口可见：UAC 弹窗与失败信息用户都能看到
+    cur_exe = Path(sys.executable).resolve()
+    if not getattr(sys, "frozen", False):
+        return jsonify({"error": "源码运行模式不支持自更新"}), 400
+    old_bak = cur_exe.with_suffix(".exe.old")
+    try:
+        # 清掉可能残留的上次备份
+        if old_bak.exists():
+            old_bak.unlink()
+        cur_exe.rename(old_bak)          # 运行中的 exe 可以改名
+        try:
+            shutil.move(str(new_file), str(cur_exe))
+        except Exception:
+            old_bak.rename(cur_exe)      # 回滚：恢复原名，程序继续可用
+            raise
+    except Exception as e:
+        return jsonify({"error": f"替换失败：{e}"}), 500
+
+    # 启动新版（分离进程），随后本进程退出
     subprocess.Popen(
-        ["cmd", "/c", str(bat)],
-        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+        [str(cur_exe)],
+        cwd=str(cur_exe.parent),
         close_fds=True,
+        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
     )
     threading.Timer(1.0, lambda: os._exit(0)).start()
     return jsonify({"ok": True})

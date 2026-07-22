@@ -48,6 +48,24 @@ if sys.stdout is None or sys.stderr is None:
 
 import gui_server  # noqa: E402
 
+# 自替换更新的收尾：清掉上一版留下的备份。
+# PyInstaller 单文件 = 引导进程 + 子进程，旧进程退出后引导端还要清理
+# 解包目录才释放 exe 句柄，删除窗口较宽；后台线程慢慢重试，删不掉也无碍
+# （占位几十 MB 而已，下次启动继续清）
+if getattr(sys, "frozen", False):
+    def _cleanup_old_bak() -> None:
+        bak = Path(sys.executable).with_suffix(".exe.old")
+        for _ in range(30):
+            if not bak.exists():
+                return
+            try:
+                bak.unlink()
+                return
+            except OSError:
+                time.sleep(2)
+
+    threading.Thread(target=_cleanup_old_bak, daemon=True).start()
+
 WINDOW_TITLE = "公众号助手"
 WINDOW_SIZE = (1180, 800)
 MIN_SIZE = (980, 640)
