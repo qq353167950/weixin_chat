@@ -69,7 +69,13 @@ def llm_rank_topics(materials: list[dict], domain: str, want_n: int = 5) -> list
         f"领域/账号方向：{domain or '综合成长/职场/副业'}\n"
         f"请从下列真实搜索结果中，提炼 {want_n} 个适合公众号的候选选题。\n"
         "每个元素字段：\n"
-        "title: 建议作为公众号选题的标题（可改写优化，不要原样照搬新闻标题堆砌）\n"
+        "title: 公众号标题，要求：\n"
+        "  - 短而有冲击力，14-24 字，绝不超过 28 字\n"
+        "  - 突出最抓人的一个点，可以适度夸张制造好奇/反差/情绪\n"
+        "    （如数字反差「3 个月从 0 到 1 万」、悬念「没人告诉你的」、\n"
+        "    立场「劝你别再…」），但不虚构事实、不做纯标题党\n"
+        "  - 口语化，像朋友转发时会说的话；禁止「浅析/探讨/之我见/\n"
+        "    关于…的思考」这类论文腔和「XX：YY」式冒号双段格式化标题\n"
         "type: 干货文/观点文/案例文/清单体 之一\n"
         "angle: 写作角度（一句话）\n"
         "why: 为什么现在值得写（结合热点）\n"
@@ -169,7 +175,7 @@ def fetch_reference_articles(
     topic: dict,
     *,
     max_n: int | None = None,
-    per_article_chars: int = 2200,
+    per_article_chars: int = 3000,
     log=print,
 ) -> list[dict]:
     """抓取参考文章原文。逐个候选尝试直到抓够 max_n 篇。
@@ -178,7 +184,7 @@ def fetch_reference_articles(
     现在失败自动换下一个候选（上限 max_n*4 次尝试），并说明失败原因。
     """
     if max_n is None:
-        max_n = int(os.getenv("ARTICLE_REF_MAX", "3") or 3)
+        max_n = int(os.getenv("ARTICLE_REF_MAX", "5") or 5)
     candidates = pick_reference_materials(materials, topic, max_n * 4)
     out: list[dict] = []
     fails = 0
@@ -216,8 +222,13 @@ def fetch_reference_articles(
 def refs_to_prompt_block(refs: list[dict]) -> str:
     if not refs:
         return ""
-    parts = ["以下是几篇真实文章片段。只学习它们的语感、用词、举例和节奏；"
-             "严禁抄袭任何句子或段落，事实数据必须自己改写核实：\n"]
+    parts = [
+        "以下是几篇真实文章片段，供你吸收「真人是怎么写这个话题的」：\n"
+        "- 学它们的语感、口头禅、举例方式、开头切入和收尾节奏\n"
+        "- 观察真人如何自然过渡段落、如何带入个人视角和情绪\n"
+        "- 多篇参考取长补短融成自己的风格，不要只模仿其中一篇\n"
+        "- 严禁抄袭任何句子或段落，事实数据必须自己改写核实：\n"
+    ]
     for i, r in enumerate(refs, 1):
         parts.append(f"【参考{i}】{r['title']}\n{r['text']}\n")
     return "\n".join(parts)
@@ -232,7 +243,8 @@ def build_article_prompt(
         "但工具、数字、方法都经得起内行推敲。\n"
         "\n"
         "【结构要求】\n"
-        "1) 第一行是 Markdown 一级标题：# 标题（吸引人但不标题党）\n"
+        "1) 第一行是 Markdown 一级标题：# 标题——14-24 字，突出最抓人的一个点，"
+        "可适度夸张制造好奇/反差，但不虚构；禁止论文腔和「XX：YY」冒号双段式\n"
         "2) 3-5 个 ## 小标题，短而有力；每节可用 > 引用块放一句核心观点\n"
         "3) 操作步骤用 1. 2. 3. 有序列表，要点用 - 列表\n"
         "4) 关键结论 **加粗**，每节至多 2 处\n"
