@@ -387,32 +387,39 @@ def api_version():
     return jsonify({"version": __version__})
 
 
+_UPDATE_CHECK_CACHE = {"at": 0.0, "payload": None}
+
+
 @app.get("/api/check_update")
 def api_check_update():
     """检查是否有新版本可用。
 
-    返回：
-      {
-        "has_update": bool,
-        "current_version": str,
-        "remote_version": str,
-        "download_url": str,
-        "changelog": str,
-        "error": str  # 仅失败时有
-      }
+    结果缓存 1 小时（GitHub 未认证 API 限流 60 次/小时/IP，
+    共享出口 IP 的环境频繁启动会被限流）；?force=1 跳过缓存。
     """
+    import time as _time
+
+    force = request.args.get("force") == "1"
+    with _LOCK:
+        cached = _UPDATE_CHECK_CACHE["payload"]
+        fresh = _time.time() - _UPDATE_CHECK_CACHE["at"] < 3600
+    if cached and fresh and not force:
+        return jsonify(cached)
+
     has, remote_ver, download_url, changelog = check_update()
-    return jsonify(
-        {
-            "has_update": has,
-            "current_version": __version__,
-            "remote_version": remote_ver if has else __version__,
-            "download_url": download_url,
-            "changelog": changelog,
-            "changelog_items": _friendly_changelog(changelog) if has else [],
-            "error": changelog if not has and changelog else "",
-        }
-    )
+    payload = {
+        "has_update": has,
+        "current_version": __version__,
+        "remote_version": remote_ver if has else __version__,
+        "download_url": download_url,
+        "changelog": changelog,
+        "changelog_items": _friendly_changelog(changelog) if has else [],
+        "error": changelog if not has and changelog else "",
+    }
+    if not payload["error"]:   # 失败结果不缓存，便于网络恢复后重试
+        with _LOCK:
+            _UPDATE_CHECK_CACHE.update({"at": _time.time(), "payload": payload})
+    return jsonify(payload)
 
 
 def _friendly_changelog(raw: str, limit: int = 8) -> list[str]:
@@ -1349,6 +1356,45 @@ def api_settings_get():
         if f["key"].startswith("SEARCH_ENABLE_") and f["key"] not in values:
             values[f["key"]] = "1"
     return jsonify({"schema": SETTINGS_SCHEMA, "values": values})
+
+
+@app.post("/api/test/llm")
+def api_test_llm():
+    """测试写作模型连通性：发一条最小请求，即时告知 Key/地址/模型名对不对。"""
+    try:
+        reply = llm_chat(
+            [{"role": "user", "content": "回复「连接成功」四个字即可"}],
+            max_tokens=20,
+        )
+        return jsonify({"ok": True, "message": f"连接成功，模型已响应：{reply[:40]}"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)[:300]})
+
+
+@app.post("/api/test/wechat")
+def api_test_wechat():
+    """测试公众号配置：尝试获取 access_token（能拿到即 AppID/Secret/IP 白名单全通）。"""
+    appid = os.getenv("WECHAT_APPID", "").strip()
+    secret = os.getenv("WECHAT_APPSECRET", "").strip()
+    if not appid or not secret:
+        return jsonify({"ok": False, "message": "请先填写 AppID 与 AppSecret"})
+    try:
+        WeChatClient(appid, secret).get_access_token(force=True)
+        return jsonify({"ok": True, "message": "连接成功：凭证有效，IP 已在白名单"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)[:300]})
+
+
+@app.get("/api/my_ip")
+def api_my_ip():
+    """查本机公网出口 IP（配公众号白名单用）。"""
+    try:
+        from http_util import request_bytes
+
+        ip = request_bytes("GET", "https://api.ipify.org", timeout=10).decode("ascii").strip()
+        return jsonify({"ip": ip})
+    except Exception as e:
+        return jsonify({"error": f"查询失败：{e}"}), 502
 
 
 @app.post("/api/settings")

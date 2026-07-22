@@ -379,6 +379,11 @@
   }
   .mini-btn:hover { background: rgba(0,0,0,0.1); }
 
+  /* 发布页字数计数 */
+  .char-count { float: right; color: var(--text-3); font-weight: 400; }
+  .char-count.near { color: var(--orange); }
+  .char-count.full { color: var(--red); }
+
   /* 历史列表 */
   .run-row {
     display: flex; align-items: center; gap: 14px;
@@ -702,13 +707,13 @@
           <div class="sub">切换后右侧手机实时刷新</div>
           <div class="theme-seg" id="theme-seg"></div>
           <div style="height:18px"></div>
-          <label class="field"><span class="cap">标题（≤64 字，可改）</span>
+          <label class="field"><span class="cap">标题（可改）<span class="char-count" id="cnt-title"></span></span>
             <input type="text" id="pub-title" maxlength="64">
           </label>
-          <label class="field"><span class="cap">摘要（≤120 字，影响打开率，可改）</span>
+          <label class="field"><span class="cap">摘要（影响打开率，可改）<span class="char-count" id="cnt-digest"></span></span>
             <textarea id="pub-digest" rows="3" maxlength="120"></textarea>
           </label>
-          <label class="field"><span class="cap">作者名（≤8 字，可改）</span>
+          <label class="field"><span class="cap">作者名（可改）<span class="char-count" id="cnt-author"></span></span>
             <input type="text" id="pub-author" maxlength="8">
           </label>
           <div class="row" style="justify-content:space-between">
@@ -755,6 +760,16 @@
       <p>四组配置各自独立 · 保存后立即生效（写入 .env）</p>
     </div>
     <div class="card" id="settings-body">加载中…</div>
+    <div class="card">
+      <h3>连接测试</h3>
+      <div class="sub">填完 Key 后先测一下，不用跑完整流程才发现配置错</div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn secondary" id="btn-test-llm">测试写作模型</button>
+        <button class="btn secondary" id="btn-test-wechat">测试公众号连接</button>
+        <button class="btn ghost" id="btn-my-ip">查本机出口 IP</button>
+      </div>
+      <div class="console" id="log-test"></div>
+    </div>
     <div class="card">
       <h3>桌面窗口</h3>
       <div class="sub">点右上角 X 时的行为（仅桌面客户端生效）</div>
@@ -1235,6 +1250,7 @@ async function loadArticle() {
   showAiChip(S.ai_hits || []);
   renderThemeSegEditor();
   refreshLivePreview();
+  await maybeRestoreDraft();   // 异常退出留下的本地草稿比服务端新时提示恢复
 }
 
 function showAiChip(hits) {
@@ -1302,6 +1318,7 @@ async function saveArticle({ silent = false } = {}) {
     $("#art-chars").textContent = `${md.length} 字`;
     showAiChip(r.ai_hits || []);
     setDirty(false);
+    localStorage.removeItem("draft-backup");   // 已落盘，本地兜底可清
     await refreshState();
     if (!silent) toast("已保存");
     return true;
@@ -1336,10 +1353,48 @@ $("#md-editor").addEventListener("compositionend", () => {
   _composing = false;
   scheduleLivePreview();   // 组合完成后补一次刷新
 });
+/* 本地草稿兜底：编辑内容防抖写 localStorage，崩溃/断电不丢稿 */
+let _draftTimer = null;
+function saveDraftLocal() {
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(() => {
+    try {
+      localStorage.setItem("draft-backup", JSON.stringify({
+        run: S.run || "", md: $("#md-editor").value, at: Date.now(),
+      }));
+    } catch (_) {}   // 配额满等异常静默
+  }, 2000);
+}
+async function maybeRestoreDraft() {
+  // 服务端文章比本地备份旧（异常退出没保存成功）时提示恢复
+  try {
+    const raw = localStorage.getItem("draft-backup");
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (!d.md || !d.md.trim() || d.run !== (S.run || "")) return;
+    const server = $("#md-editor").value;
+    if (server === d.md) { localStorage.removeItem("draft-backup"); return; }
+    if (d.md.length > server.length) {
+      const ok = await askConfirm("发现未保存的草稿",
+        `本地有一份更完整的编辑备份（${d.md.length} 字，当前 ${server.length} 字），恢复它吗？`);
+      if (ok) {
+        $("#md-editor").value = d.md;
+        setDirty(true);
+        $("#art-chars").textContent = `${d.md.length} 字`;
+        refreshLivePreview();
+        toast("草稿已恢复，记得保存");
+      } else {
+        localStorage.removeItem("draft-backup");
+      }
+    }
+  } catch (_) { localStorage.removeItem("draft-backup"); }
+}
+
 $("#md-editor").addEventListener("input", () => {
   if (!MD_DIRTY) setDirty(true);   // 只在状态翻转时走 pywebview 桥，减少每键开销
   $("#art-chars").textContent = `${$("#md-editor").value.length} 字`;
   if (!_composing) scheduleLivePreview();
+  saveDraftLocal();
 });
 
 /* 复制排版后内容：富文本进剪贴板，可直接粘贴进公众号编辑器 */
@@ -1596,9 +1651,21 @@ function renderThemeSeg() {
   });
 }
 
-/* 标题/摘要/作者：用户改过就不再被自动生成值覆盖（换主题重渲染时保护手动修改） */
-["pub-title", "pub-digest", "pub-author"].forEach(id => {
-  $(`#${id}`).addEventListener("input", (e) => { e.target.dataset.edited = "1"; });
+/* 标题/摘要/作者：编辑保护 + 实时字数（23/64 式，接近上限变色） */
+const PUB_LIMITS = { "pub-title": 64, "pub-digest": 120, "pub-author": 8 };
+function updateCharCount(id) {
+  const el = $(`#${id}`);
+  const cnt = $(`#cnt-${id.replace("pub-", "")}`);
+  const max = PUB_LIMITS[id];
+  const n = el.value.length;
+  cnt.textContent = `${n}/${max}`;
+  cnt.className = "char-count" + (n >= max ? " full" : n >= max * 0.85 ? " near" : "");
+}
+Object.keys(PUB_LIMITS).forEach(id => {
+  $(`#${id}`).addEventListener("input", (e) => {
+    e.target.dataset.edited = "1";
+    updateCharCount(id);
+  });
 });
 
 async function renderPreview() {
@@ -1609,6 +1676,7 @@ async function renderPreview() {
     const fill = (id, val) => {
       const el = $(`#${id}`);
       if (el.dataset.edited !== "1") el.value = val;
+      updateCharCount(id);
     };
     fill("pub-title", r.title);
     fill("pub-digest", r.digest);
@@ -1785,6 +1853,47 @@ async function loadRunsPage() {
     box.appendChild(p);
   }
 }
+
+/* ================= 连接测试 ================= */
+function testLog(msg, isErr) {
+  const box = $("#log-test");
+  box.classList.add("show");
+  const div = document.createElement("div");
+  div.textContent = msg;
+  div.className = isErr ? "err" : "okline";
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+async function runTest(btn, path, label) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "测试中…";
+  testLog(`— 开始${label} —`, false);
+  try {
+    const r = await api(path, { method: "POST", body: {}, timeoutMs: 60000 });
+    testLog((r.ok ? "✓ " : "✗ ") + r.message, !r.ok);
+  } catch (e) {
+    testLog("✗ " + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+$("#btn-test-llm").addEventListener("click", (e) => runTest(e.target, "/api/test/llm", "写作模型测试"));
+$("#btn-test-wechat").addEventListener("click", (e) => runTest(e.target, "/api/test/wechat", "公众号连接测试"));
+$("#btn-my-ip").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  try {
+    const r = await api("/api/my_ip", { timeoutMs: 15000 });
+    testLog(`本机出口 IP：${r.ip}（点击本行复制，去公众号后台加白名单）`, false);
+    const line = $("#log-test").lastChild;
+    line.style.cursor = "pointer";
+    line.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(r.ip); toast("IP 已复制"); } catch (_) {}
+    });
+  } catch (err) { testLog("✗ " + err.message, true); }
+  finally { e.target.disabled = false; }
+});
 
 /* ================= 页5 设置 ================= */
 let SETTINGS_SCHEMA = null;
