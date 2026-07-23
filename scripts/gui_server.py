@@ -583,11 +583,20 @@ def api_update_install():
         except Exception:
             pass
         _time.sleep(0.3)
+        # PyInstaller 单文件：子进程靠 _MEIPASS2 / _PYI_* 环境变量复用父进程的解包目录。
+        # 若新 exe 继承了这些变量，会占用旧进程的 _MEI 临时目录，旧进程退出时删不掉，
+        # 弹出「Failed to remove temporary directory: ..._MEIxxxxx」。剥掉后新进程像
+        # 全新启动一样独立解包到自己的临时目录，旧目录即可被正常清理。
+        child_env = {
+            k: v for k, v in os.environ.items()
+            if not k.startswith(("_MEIPASS", "_PYI"))
+        }
         subprocess.Popen(
             [str(cur_exe)],
             cwd=str(cur_exe.parent),
             close_fds=True,
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+            env=child_env,
         )
         _time.sleep(0.7)
         os._exit(0)
