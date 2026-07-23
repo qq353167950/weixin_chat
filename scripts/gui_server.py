@@ -65,7 +65,7 @@ from markdown_to_wechat_html import (  # noqa: E402
 from topic_search import resolve_provider, search_hot_materials  # noqa: E402
 from task_hooks import TaskCancelled as TaskCancelledHook  # noqa: E402
 from task_hooks import clear_hooks, set_hooks  # noqa: E402
-from version import __version__, check_update  # noqa: E402
+from version import __version__, GITHUB_REPO, check_update  # noqa: E402
 from wechat_client import WeChatClient  # noqa: E402
 
 app = Flask(__name__)
@@ -130,6 +130,18 @@ class TaskBusyError(RuntimeError):
         self.running = running
 
 
+_PROGRESS_DIGITS_RE = re.compile(r"\d+")
+
+
+def _progress_stem(msg: str) -> str:
+    """去掉数字得到进度「词干」：判断两条进度是否同一段的高频刷新。
+
+    「已生成 100 字…」与「已生成 200 字…」词干相同（同段刷新），
+    「已生成 800 字…」与「正在请求生图 API…」词干不同（阶段切换）。
+    """
+    return _PROGRESS_DIGITS_RE.sub("", msg or "")
+
+
 def _new_task(name: str) -> dict:
     task = {
         "id": uuid.uuid4().hex[:12],
@@ -174,6 +186,11 @@ def _run_task(name: str, fn) -> dict:
 
     def _progress(msg: str) -> None:
         with _LOCK:
+            prev = task["progress"]
+            # 阶段切换（去数字词干不同）时把上一条进度固化为日志，避免被原地刷新覆盖丢失；
+            # 同一段的高频刷新（如「已生成 N 字」）词干相同，只更新不入日志，不刷屏
+            if prev and _progress_stem(prev) != _progress_stem(msg):
+                task["log"].append(prev)
             task["progress"] = msg
 
     def worker() -> None:
@@ -413,6 +430,7 @@ def api_check_update():
         "current_version": __version__,
         "remote_version": remote_ver if has else __version__,
         "download_url": download_url,
+        "release_url": f"https://github.com/{GITHUB_REPO}/releases/latest",
         "changelog": changelog,
         "changelog_items": _friendly_changelog(changelog) if has else [],
         "error": changelog if not has and changelog else "",
@@ -1175,11 +1193,22 @@ def api_task_cancel(tid: str):
 
 @app.post("/api/open_url")
 def api_open_url():
-    """用系统默认浏览器打开链接（桌面窗口内 window.open 行为不可靠）。"""
+    """用系统默认浏览器打开链接（桌面窗口内 window.open 行为不可靠）。
+
+    Windows 优先 os.startfile：等同资源管理器双击链接，由 Shell 按默认关联打开，
+    绝不传 --user-data-dir/--guest/--incognito 等参数，不会新建或切换浏览器 profile，
+    从根本上避免「以访客身份启动、像清空了浏览器登录信息」的现象。
+    """
     url = str((request.get_json(force=True) or {}).get("url") or "").strip()
     if not url.startswith(("https://mp.weixin.qq.com", "https://github.com/qq353167950/")):
         return jsonify({"error": "不允许的链接"}), 400
-    webbrowser.open(url)
+    try:
+        if sys.platform == "win32":
+            os.startfile(url)  # noqa: S606  Windows 专用：Shell 默认关联打开，不带任何浏览器参数
+        else:
+            webbrowser.open(url)
+    except Exception:
+        webbrowser.open(url)
     return jsonify({"ok": True})
 
 
@@ -1297,7 +1326,12 @@ SETTINGS_SCHEMA = [
             {"key": "IMAGE_API_KEY", "label": "API Key", "secret": True},
             {"key": "IMAGE_BASE_URL", "label": "接口根地址"},
             {"key": "IMAGE_MODEL", "label": "生图模型名"},
-            {"key": "IMAGE_SIZE", "label": "生成尺寸"},
+            {
+                "key": "IMAGE_SIZE",
+                "label": "生成尺寸",
+                "hint": "OpenAI/DALL·E 3：1792x1024（横版，x 分隔；另可 1024x1024、1024x1792）；"
+                        "阿里万相：1280*720（* 分隔，边长 512~1440）。换生图方式后按此调整。",
+            },
             {
                 "key": "IMAGE_STYLE",
                 "label": "画面风格",
@@ -1415,14 +1449,35 @@ def api_test_wechat():
 
 @app.get("/api/my_ip")
 def api_my_ip():
-    """查本机公网出口 IP（配公众号白名单用）。"""
-    try:
-        from http_util import request_bytes
+    """查本机公网出口 IP（配公众号白名单用）。
 
-        ip = request_bytes("GET", "https://api.ipify.org", timeout=10).decode("ascii").strip()
-        return jsonify({"ip": ip})
-    except Exception as e:
-        return jsonify({"error": f"查询失败：{e}"}), 502
+    多端点顺序探测：单一境外端点（如 api.ipify.org）在国内网络常被 RST（10054），
+    故混合国内外端点，每个短超时且不重试，任一成功即返回；全失败给友好提示。
+    """
+    from http_util import request_bytes
+
+    # 国内可达端点优先（实测多数境外端点在国内会 SSL/RST 失败且拖满超时），
+    # 境外端点作为海外 / VPN 网络的后备；纯文本端点解析简单，排在前面
+    endpoints = (
+        "https://ip.3322.net",          # 国内纯文本，命中最快
+        "https://4.ipw.cn",             # 国内纯文本 IPv4
+        "https://api.ipify.org",        # 境外，海外 / VPN 网络用
+        "https://ipv4.icanhazip.com",   # 境外
+        "https://myip.ipip.net",        # 国内，含中文，兜底
+        "https://ifconfig.me/ip",       # 境外，兜底
+    )
+    ipv4_re = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+    for ep in endpoints:
+        try:
+            text = request_bytes("GET", ep, timeout=6, retries=1).decode("utf-8", "ignore")
+        except Exception:
+            continue
+        m = ipv4_re.search(text)
+        if m and all(0 <= int(x) <= 255 for x in m.group(0).split(".")):
+            return jsonify({"ip": m.group(0)})
+    return jsonify(
+        {"error": "所有查询源都没连上，可手动打开浏览器访问 https://ip.cn 查看本机出口 IP"}
+    ), 502
 
 
 @app.post("/api/settings")

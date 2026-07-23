@@ -140,6 +140,7 @@
   textarea { resize: vertical; line-height: 1.7; }
   label.field { display: block; margin-bottom: 14px; }
   label.field .cap { display:block; font-size: 12px; color: var(--text-2); margin-bottom: 6px; font-weight: 500; }
+  label.field .fhint { display:block; font-size: 11px; color: var(--text-2); margin-top: 6px; line-height: 1.5; opacity: .85; }
 
   /* 开关 */
   .switch { position: relative; width: 44px; height: 26px; flex: none; }
@@ -766,7 +767,7 @@
       <div class="row" style="margin-bottom:10px">
         <button class="btn secondary" id="btn-test-llm">测试写作模型</button>
         <button class="btn secondary" id="btn-test-wechat">测试公众号连接</button>
-        <button class="btn ghost" id="btn-my-ip">查本机出口 IP</button>
+        <button class="btn secondary" id="btn-my-ip">查本机出口 IP</button>
       </div>
       <div class="console" id="log-test"></div>
     </div>
@@ -1928,6 +1929,7 @@ async function loadSettings() {
             const [v, lbl] = Array.isArray(o) ? o : [o, o];
             return `<option value="${v}" ${v === val ? "selected" : ""}>${lbl}</option>`;
           }).join("")}</select>`;
+        if (f.hint) lab.innerHTML += `<span class="fhint">${f.hint}</span>`;
         grid.appendChild(lab);
       } else {
         const lab = document.createElement("label");
@@ -1954,6 +1956,7 @@ async function loadSettings() {
             <input type="text" data-key="${f.key}" value="${safeVal}"
                    placeholder="" autocomplete="off">`;
         }
+        if (f.hint) lab.innerHTML += `<span class="fhint">${f.hint}</span>`;
         grid.appendChild(lab);
       }
     });
@@ -2117,7 +2120,7 @@ function showUpdateDialog(info) {
     // Windows 单 exe 走程序内自替换更新；其他平台回退浏览器下载
     const isExe = /\.exe$/i.test(info.download_url || "");
     if (!isExe) {
-      if (info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.download_url } }).catch(() => window.open(info.download_url, "_blank")); }
+      if (info.release_url || info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.release_url || info.download_url } }).catch(() => {}); }
       $("#update-mask").classList.remove("show");
       return;
     }
@@ -2142,7 +2145,7 @@ function showUpdateDialog(info) {
       $("#up-progress").style.display = "none";
       $("#up-actions").style.display = "";
       toast("更新失败：" + e.message + "，可到 GitHub 手动下载", 5000);
-      if (info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.download_url } }).catch(() => window.open(info.download_url, "_blank")); }
+      if (info.release_url || info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.release_url || info.download_url } }).catch(() => {}); }
     }
   };
 }

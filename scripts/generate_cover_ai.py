@@ -170,6 +170,29 @@ def download_image(url: str, timeout: int = 60) -> Image.Image:
     return Image.open(BytesIO(content)).convert("RGB")
 
 
+def _normalize_image_size(size: str, provider: str, model: str = "") -> str:
+    """按 provider 规范化尺寸，避免 x/* 分隔符或取值配错导致生图 API 报错。
+
+    - openai：统一 x 分隔；dall-e-3 只认 1024x1024 / 1792x1024 / 1024x1792，
+      非法回退 1792x1024（其它 OpenAI 兼容模型不限制取值，仅归一分隔符）。
+    - dashscope（万相）：统一 * 分隔；边长须在 512~1440，越界回退 1280*720。
+    """
+    raw = (size or "").strip()
+    nums = [p for p in re.split(r"[*xX×]", raw) if p.strip().isdigit()]
+
+    if provider in {"dashscope", "wanx", "wanxiang", "ali", "qwen-image"}:
+        if len(nums) == 2 and all(512 <= int(n) <= 1440 for n in nums):
+            return f"{int(nums[0])}*{int(nums[1])}"
+        print(f"[生图] 尺寸 {raw!r} 不适用于万相（须 512~1440、用 * 分隔），已回退 1280*720")
+        return "1280*720"
+
+    std = f"{int(nums[0])}x{int(nums[1])}" if len(nums) == 2 else raw
+    if "dall-e-3" in (model or "").lower() and std not in {"1024x1024", "1792x1024", "1024x1792"}:
+        print(f"[生图] 尺寸 {raw!r} 不被 dall-e-3 支持，已回退 1792x1024")
+        return "1792x1024"
+    return std
+
+
 # ---------------- OpenAI-compatible image API ----------------
 def gen_openai(prompt: str) -> Image.Image:
     """Uses IMAGE_* only (never LLM_* / SEARCH_*)."""
@@ -190,6 +213,7 @@ def gen_openai(prompt: str) -> Image.Image:
     base = os.getenv("IMAGE_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
     model = os.getenv("IMAGE_MODEL", "dall-e-3").strip() or "dall-e-3"
     size = os.getenv("IMAGE_SIZE", "1792x1024").strip() or "1792x1024"
+    size = _normalize_image_size(size, "openai", model)
     url = f"{base}/images/generations"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -252,6 +276,7 @@ def gen_dashscope(prompt: str) -> Image.Image:
         or os.getenv("DASHSCOPE_IMAGE_SIZE", "1280*720")
         or "1280*720"
     )
+    size = _normalize_image_size(size, "dashscope", model)
 
     create_url = f"{base}/api/v1/services/aigc/text2image/image-synthesis"
     headers = {
