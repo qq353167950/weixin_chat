@@ -360,9 +360,12 @@ def main() -> int:
         import webview
 
         bridge = Bridge()
+        # 带版本号做 cache-busting：更新后即使 WebView2 仍复用旧端口（同 origin），
+        # URL 变化也会强制重新加载新版页面（配合服务端首页 no-store 双保险）
+        window_url = f"{url}/?v={gui_server.__version__}"
         window = webview.create_window(
             WINDOW_TITLE,
-            url,
+            window_url,
             js_api=bridge,
             width=WINDOW_SIZE[0],
             height=WINDOW_SIZE[1],

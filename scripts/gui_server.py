@@ -338,7 +338,15 @@ def _on_task_busy(e: TaskBusyError):
 
 @app.get("/")
 def index():
-    return send_from_directory(ASSETS / "gui", "index.html")
+    # 首页永不缓存：自替换更新后新旧进程常复用同一端口（同 origin），
+    # WebView2 会命中旧 index.html 缓存 → 版本号已更新但界面/JS 仍是旧版，
+    # 必须手动重启才生效。禁缓存并去掉条件校验头，每次导航都取最新页面。
+    resp = send_from_directory(ASSETS / "gui", "index.html")
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    resp.headers["Expires"] = "0"
+    resp.headers.pop("ETag", None)
+    resp.headers.pop("Last-Modified", None)
+    return resp
 
 
 @app.get("/favicon.ico")
