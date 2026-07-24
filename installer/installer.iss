@@ -24,11 +24,13 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 ; 安装包自身属性（资源管理器「属性」与缓存键）
+; 注意：公司字段官方关键字是 VersionInfoCompany（不是 VersionInfoCompanyName）
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoProductName={#MyAppName}
-VersionInfoCompanyName={#MyAppPublisher}
+VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} 安装程序
+VersionInfoCopyright=Copyright (C) {#MyAppPublisher}
 ; 用户级安装（同 Chrome/VS Code）：装到当前用户目录，安装与更新全程无 UAC
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#MyAppName}
