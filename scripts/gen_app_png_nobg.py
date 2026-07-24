@@ -4,6 +4,8 @@
 默认源：assets/app-with-white-bg.png（首次去底时备份的原图）
 输出：assets/app.png（1024×1024 透明底，主体居中）
 
+抠图策略：只保留实色青绿叶子/枝干，去掉纸白与底部淡青光晕。
+
 用法：
   python scripts/gen_app_png_nobg.py
   python scripts/gen_app_ico.py   # 同步 Windows ico
@@ -12,7 +14,6 @@
 from __future__ import annotations
 
 import sys
-from collections import deque
 from pathlib import Path
 
 from PIL import Image
@@ -25,26 +26,38 @@ SRC_CANDIDATES = (
 OUT = ROOT / "assets" / "app.png"
 
 
-def bg_score(r: int, g: int, b: int) -> int:
-    """0=主体，255=背景。"""
+def is_logo_ink(r: int, g: int, b: int) -> bool:
+    """实色青绿叶子/枝干，排除纸白与淡青雾。"""
     mn, mx = min(r, g, b), max(r, g, b)
     sat = mx - mn
-    greenish = (g >= r + 12 and g >= 70) or (g >= r + 5 and b >= r + 5 and g >= 90)
-    if greenish:
-        if mn >= 248 and sat < 25:
-            return 200
-        return 0
-    if mn >= 250 and sat <= 12:
-        return 255
-    if mn >= 240 and sat <= 20:
-        return 255
-    if mn >= 230 and sat <= 25:
-        return int(180 + (mn - 230) * 3)
-    if mn >= 220 and sat <= 30:
-        return 120
-    if sat <= 18 and mn >= 160:
-        return min(255, int(100 + (mn - 160)))
-    return 0
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    # 必须偏绿
+    if g < r + 8:
+        return False
+    # 太亮且饱和度不够 = 背景雾（含底部浅白/淡青）
+    if lum >= 220 and sat < 55:
+        return False
+    if lum >= 200 and sat < 40:
+        return False
+    if mn >= 200 and sat < 60 and g < 230:
+        if not (g >= 150 and sat >= 50 and g >= r + 20):
+            return False
+    if g >= 90 and sat >= 35 and g >= r + 10:
+        return True
+    if g >= 70 and sat >= 50 and g >= r + 15:
+        return True
+    if g >= 40 and sat >= 30 and g >= r + 8 and lum < 180:
+        return True
+    return False
+
+
+def near_logo(mask: list[list[bool]], x: int, y: int, w: int, h: int, rad: int = 2) -> bool:
+    for dy in range(-rad, rad + 1):
+        for dx in range(-rad, rad + 1):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < w and 0 <= ny < h and mask[ny][nx]:
+                return True
+    return False
 
 
 def remove_white_bg(src: Image.Image) -> Image.Image:
@@ -52,30 +65,11 @@ def remove_white_bg(src: Image.Image) -> Image.Image:
     w, h = src.size
     px = src.load()
 
-    bg = [[False] * w for _ in range(h)]
-    q: deque[tuple[int, int]] = deque()
-    for x in range(w):
-        for y in (0, h - 1):
-            r, g, b, _a = px[x, y]
-            if bg_score(r, g, b) >= 100:
-                bg[y][x] = True
-                q.append((x, y))
+    mask = [[False] * w for _ in range(h)]
     for y in range(h):
-        for x in (0, w - 1):
-            if not bg[y][x]:
-                r, g, b, _a = px[x, y]
-                if bg_score(r, g, b) >= 100:
-                    bg[y][x] = True
-                    q.append((x, y))
-    while q:
-        x, y = q.popleft()
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < w and 0 <= ny < h and not bg[ny][nx]:
-                r, g, b, _a = px[nx, ny]
-                if bg_score(r, g, b) >= 100:
-                    bg[ny][nx] = True
-                    q.append((nx, ny))
+        for x in range(w):
+            r, g, b, _a = px[x, y]
+            mask[y][x] = is_logo_ink(r, g, b)
 
     out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     op = out.load()
@@ -83,16 +77,22 @@ def remove_white_bg(src: Image.Image) -> Image.Image:
     for y in range(h):
         for x in range(w):
             r, g, b, _a = px[x, y]
-            sc = bg_score(r, g, b)
-            if bg[y][x]:
-                if sc >= 200:
+            if mask[y][x]:
+                alpha = 255
+            elif near_logo(mask, x, y, w, h, 2):
+                # 仅给紧贴主体的轻微青绿边缘做抗锯齿，避免底部雾状底
+                if g >= r + 5 and g >= 60:
+                    sat = max(r, g, b) - min(r, g, b)
+                    lum = 0.299 * r + 0.587 * g + 0.114 * b
+                    if lum < 230 and sat >= 25:
+                        alpha = 90
+                    else:
+                        continue
+                else:
                     continue
-                alpha = max(0, 255 - sc)
             else:
-                alpha = max(0, 255 - sc) if sc else 255
-            if alpha <= 8:
                 continue
-            op[x, y] = (r, g, b, min(255, alpha))
+            op[x, y] = (r, g, b, alpha)
             minx = min(minx, x)
             miny = min(miny, y)
             maxx = max(maxx, x)
@@ -101,7 +101,7 @@ def remove_white_bg(src: Image.Image) -> Image.Image:
     if maxx < 0:
         raise RuntimeError("未识别到 logo 主体，请检查源图")
 
-    pad = 20
+    pad = 24
     box = (
         max(0, minx - pad),
         max(0, miny - pad),
@@ -110,7 +110,7 @@ def remove_white_bg(src: Image.Image) -> Image.Image:
     )
     cropped = out.crop(box)
     cw, ch = cropped.size
-    side = int(max(cw, ch) / 0.92)
+    side = int(max(cw, ch) / 0.90)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     canvas.paste(cropped, ((side - cw) // 2, (side - ch) // 2), cropped)
     return canvas.resize((1024, 1024), Image.Resampling.LANCZOS)
