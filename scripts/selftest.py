@@ -343,7 +343,14 @@ def test_article_quality_limits() -> None:
 
 def test_version_compare() -> None:
     print("[8] 版本号比较（更新链路基石）")
-    from version import _friendly_http_error, _parse_atom_latest, compare_version
+    import version as version_module
+    from version import (
+        _friendly_http_error,
+        _parse_atom_latest,
+        _pick_asset_url,
+        compare_version,
+        github_installer_url,
+    )
     import urllib.error
 
     check("1.2.3 < 1.2.4", compare_version("1.2.3", "1.2.4") == -1)
@@ -370,15 +377,95 @@ def test_version_compare() -> None:
     msg = _friendly_http_error(rate)
     check("限流错误不叫纯网络失败", "限流" in msg or "次数" in msg, msg)
 
+    original_system = version_module.platform.system
+    try:
+        version_module.platform.system = lambda: "Windows"
+        assets = [
+            {
+                "name": "wechat-assistant-setup-v2.2.0.exe",
+                "browser_download_url": "https://github.com/x/y/setup.exe",
+            },
+            {
+                "name": "wechat-assistant.exe",
+                "browser_download_url": "https://github.com/x/y/portable.exe",
+            },
+        ]
+        check(
+            "内置更新优先绿色版 exe",
+            _pick_asset_url(assets, "2.2.0").endswith("/portable.exe"),
+        )
+        installer_only = [assets[0]]
+        check(
+            "只有安装器时不误选安装器",
+            _pick_asset_url(installer_only, "2.2.0").endswith(
+                "/v2.2.0/wechat-assistant.exe"
+            ),
+        )
+    finally:
+        version_module.platform.system = original_system
+
+    check(
+        "Windows 已知版本返回安装包直链",
+        github_installer_url("2.2.0", system="Windows").endswith(
+            "/v2.2.0/wechat-assistant-setup-v2.2.0.exe"
+        ),
+    )
+    check(
+        "macOS 已知版本返回 zip 直链",
+        github_installer_url("2.2.0", system="Darwin").endswith(
+            "/v2.2.0/wechat-assistant-macos.zip"
+        ),
+    )
+    check(
+        "版本未知回退 latest 发布页",
+        github_installer_url().endswith("/releases/latest"),
+    )
+
 
 def test_friendly_changelog() -> None:
     print("[9] Release 说明条目化")
+    import gui_server as gui_server_module
     from gui_server import _friendly_changelog
+    from version import github_installer_url
 
     items = _friendly_changelog("- 新增：功能A\n- 修复：[问题B](https://x.com) by @bot\n说明段落忽略")
     check("提取条目并剥链接署名", items == ["新增：功能A", "修复：问题B"], str(items))
     check("表格正文退化为通用文案",
           _friendly_changelog("| 文件 | 平台 |\n|---|---|\n| a.exe | Win |") == ["其他修复与优化"])
+
+    original_check = gui_server_module.check_update
+    try:
+        gui_server_module._UPDATE_CHECK_CACHE.update({"at": 0.0, "payload": None})
+        gui_server_module.check_update = lambda: (
+            False,
+            "",
+            "",
+            "GitHub API 访问次数已用尽",
+        )
+        failed = gui_server_module.app.test_client().get("/api/check_update?force=1").get_json()
+        check(
+            "检查失败仍返回可复制地址",
+            failed["manual_download_url"].endswith("/releases/latest"),
+            failed["manual_download_url"],
+        )
+
+        gui_server_module.check_update = lambda: (
+            True,
+            "2.2.0",
+            "https://github.com/x/y/releases/download/v2.2.0/wechat-assistant.exe",
+            "- 新增：功能A",
+        )
+        available = gui_server_module.app.test_client().get(
+            "/api/check_update?force=1"
+        ).get_json()
+        check(
+            "发现更新时返回当前平台安装包地址",
+            available["manual_download_url"] == github_installer_url("2.2.0"),
+            available["manual_download_url"],
+        )
+    finally:
+        gui_server_module.check_update = original_check
+        gui_server_module._UPDATE_CHECK_CACHE.update({"at": 0.0, "payload": None})
 
 
 def test_wechat_errcode() -> None:

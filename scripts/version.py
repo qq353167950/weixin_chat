@@ -17,12 +17,13 @@ import urllib.error
 import urllib.request
 from typing import Literal
 
-__version__ = "2.1.7"
+__version__ = "2.1.8"
 
 GITHUB_REPO = "qq353167950/weixin_chat"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 # Atom 订阅不走 REST 限流（未认证 API 仅 60 次/小时/IP），国内经代理时更稳
 GITHUB_ATOM = f"https://github.com/{GITHUB_REPO}/releases.atom"
+GITHUB_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 TIMEOUT = 12  # 秒
 _UA = "weixin-chat-updater"
 
@@ -46,6 +47,28 @@ def compare_version(v1: str, v2: str) -> Literal[-1, 0, 1]:
     if p1 > p2:
         return 1
     return 0
+
+
+def github_installer_url(
+    remote_ver: str | None = None, *, system: str | None = None
+) -> str:
+    """返回当前平台可复制的 GitHub 安装包地址。
+
+    已知版本时按 CI 产物命名生成直链；检查失败、版本未知时返回 latest
+    发布页。版本值只接受数字版本号，避免把远程订阅内容拼进 URL。
+    """
+    if remote_ver:
+        match = re.fullmatch(r"v?(\d+(?:\.\d+){1,3})", str(remote_ver).strip())
+        if match:
+            tag = f"v{match.group(1)}"
+            base = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}"
+            current_system = (system or platform.system()).lower()
+            if current_system == "windows":
+                return f"{base}/wechat-assistant-setup-{tag}.exe"
+            if current_system == "darwin":
+                return f"{base}/wechat-assistant-macos.zip"
+            return f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}"
+    return GITHUB_RELEASE_URL
 
 
 def _http_get(url: str, *, accept: str = "*/*") -> bytes:
@@ -154,7 +177,8 @@ def _default_download_url(remote_ver: str) -> str:
 def _pick_asset_url(assets: list, remote_ver: str) -> str:
     sys = platform.system().lower()
     patterns = {
-        "windows": [r"^wechat-assistant\.exe$", r"wechat-assistant\.exe$", r"\.exe$"],
+        # 自替换只能使用绿色版主程序；安装器也是 .exe，绝不能误选后覆盖主程序。
+        "windows": [r"^wechat-assistant\.exe$"],
         "darwin": [r"macos.*\.zip$", r"\.app\.zip$", r"\.zip$"],
         "linux": [r"linux.*\.tar\.gz$", r"\.tar\.gz$"],
     }

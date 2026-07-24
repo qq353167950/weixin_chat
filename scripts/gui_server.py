@@ -64,7 +64,12 @@ from markdown_to_wechat_html import (  # noqa: E402
 from topic_search import resolve_provider, search_hot_materials  # noqa: E402
 from task_hooks import TaskCancelled as TaskCancelledHook  # noqa: E402
 from task_hooks import clear_hooks, set_hooks  # noqa: E402
-from version import __version__, GITHUB_REPO, check_update  # noqa: E402
+from version import (  # noqa: E402
+    GITHUB_RELEASE_URL,
+    __version__,
+    check_update,
+    github_installer_url,
+)
 from wechat_client import WeChatClient  # noqa: E402
 
 app = Flask(__name__)
@@ -452,7 +457,8 @@ def api_state():
 @app.get("/api/version")
 def api_version():
     """返回当前版本号。"""
-    return jsonify({"version": __version__})
+    # 该地址是网络检查失败时的稳定回退，不依赖当前 Release 版本号。
+    return jsonify({"version": __version__, "github_download_url": GITHUB_RELEASE_URL})
 
 
 _UPDATE_CHECK_CACHE = {"at": 0.0, "payload": None}
@@ -463,7 +469,7 @@ def api_check_update():
     """检查是否有新版本可用。
 
     结果缓存 1 小时（GitHub 未认证 API 限流 60 次/小时/IP，
-    共享出口 IP 的环境频繁启动会被限流）；?force=1 跳过缓存。
+    避免用户连续点击或多个窗口重复请求）；?force=1 跳过缓存。
     """
     import time as _time
 
@@ -475,12 +481,17 @@ def api_check_update():
         return jsonify(cached)
 
     has, remote_ver, download_url, changelog = check_update()
+    # 有远程版本时拼出 CI 约定的安装包直链；订阅源/API 都不可用时退回
+    # releases/latest 页面，保证前端始终能给用户一个可复制的 GitHub 地址。
+    github_download_url = github_installer_url(remote_ver if has else None)
     payload = {
         "has_update": has,
         "current_version": __version__,
         "remote_version": remote_ver if has else __version__,
         "download_url": download_url,
-        "release_url": f"https://github.com/{GITHUB_REPO}/releases/latest",
+        "release_url": GITHUB_RELEASE_URL,
+        "github_download_url": github_download_url,
+        "manual_download_url": github_download_url,
         "changelog": changelog,
         "changelog_items": _friendly_changelog(changelog) if has else [],
         "error": changelog if not has and changelog else "",

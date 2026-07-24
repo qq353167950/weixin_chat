@@ -390,8 +390,8 @@
 <!-- 更新弹层 -->
 <div class="mask" id="update-mask">
   <div class="modal" style="max-width:460px;text-align:left">
-    <h3 style="text-align:center">发现新版本 <span id="up-ver"></span></h3>
-    <p style="text-align:center;margin-top:4px" class="muted">本次更新内容</p>
+    <h3 id="up-title" style="text-align:center"><span id="up-title-text">发现新版本</span> <span id="up-ver"></span></h3>
+    <p id="up-subtitle" style="text-align:center;margin-top:4px" class="muted">本次更新内容</p>
     <ol id="up-items" style="margin:14px 0 4px 4px;padding-left:20px;font-size:14px;line-height:1.9;color:var(--ink)"></ol>
     <p class="muted" style="font-size:12px;margin-top:10px">
       更新不会影响你的配置（.env）与历史文章产出。
@@ -401,6 +401,14 @@
         <div id="up-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
       </div>
       <p class="muted" id="up-progress-text" style="text-align:center;margin-top:8px;font-size:12px">正在下载…</p>
+    </div>
+    <div id="up-fallback" style="display:none;margin-top:14px">
+      <p id="up-fallback-reason" class="muted" style="font-size:12px;margin:0 0 8px"></p>
+      <label for="up-fallback-url" class="muted" style="display:block;font-size:12px;margin-bottom:6px">GitHub 安装包地址</label>
+      <div class="row" style="gap:8px;flex-wrap:nowrap;margin-top:0">
+        <input id="up-fallback-url" type="text" readonly spellcheck="false" style="flex:1;min-width:0;padding:9px 10px;font-size:12px">
+        <button class="btn secondary" id="up-copy-url" type="button" style="white-space:nowrap">复制地址</button>
+      </div>
     </div>
     <div class="row" style="justify-content:center;margin-top:20px" id="up-actions">
       <button class="btn secondary" id="up-later">稍后再说</button>

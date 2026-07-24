@@ -1543,31 +1543,76 @@ $("#close-mask").addEventListener("click", (e) => {
 });
 
 /* ============ 版本更新检查 ============ */
+// 本地服务不可达时仍可提供稳定的 GitHub 发布页地址。
+let UPDATE_FALLBACK_URL = "https://github.com/qq353167950/weixin_chat/releases/latest";
+let UPDATE_CHECKING = false;
+
 async function loadVersion() {
   try {
     const r = await api("/api/version");
     $("#version-text").textContent = r.version;
+    if (typeof r.github_download_url === "string" && r.github_download_url.startsWith("https://github.com/")) {
+      UPDATE_FALLBACK_URL = r.github_download_url;
+    }
   } catch (e) {
     $("#version-text").textContent = "?";
   }
 }
 
-async function checkUpdate(manual = false) {
+async function checkUpdate() {
+  if (UPDATE_CHECKING) return;
+  UPDATE_CHECKING = true;
+  const button = $("#btn-version");
+  button.disabled = true;
   try {
     const r = await api("/api/check_update", { timeoutMs: 15000 });
     if (r.has_update) {
       showUpdateDialog(r);
-    } else if (manual) {
-      toast(r.error ? "检查失败：" + r.error : "已是最新版本", 3000);
+    } else if (r.error) {
+      // 检查失败时不只弹 toast，直接给出可复制的手动下载地址。
+      showUpdateFallback(r, "检查更新失败：" + r.error);
+    } else {
+      toast("已是最新版本", 3000);
     }
   } catch (e) {
-    if (manual) toast("检查更新失败：" + e.message, 3500);
+    showUpdateFallback({}, "检查更新失败：" + e.message);
+  } finally {
+    button.disabled = false;
+    UPDATE_CHECKING = false;
   }
 }
 
-/* 更新弹层：1. 2. 3. 条目化展示 + 内置下载安装 */
+function updateFallbackUrl(info = {}) {
+  const candidates = [info.github_download_url, info.manual_download_url,
+    info.release_url, UPDATE_FALLBACK_URL];
+  return candidates.find(url => typeof url === "string" && url.startsWith("https://github.com/"))
+    || UPDATE_FALLBACK_URL;
+}
+
+async function copyUpdateUrl() {
+  const input = $("#up-fallback-url");
+  const text = (input && input.value || "").trim();
+  if (!text) return;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (_) {
+    input.focus();
+    input.select();
+    copied = document.execCommand("copy");
+  }
+  toast(copied ? "GitHub 地址已复制" : "复制失败，请手动选择地址", 1800);
+}
+
+$("#up-copy-url").addEventListener("click", copyUpdateUrl);
+$("#up-fallback-url").addEventListener("focus", (e) => e.target.select());
+
+/* 更新弹层：优先内置下载安装，失败时展示可复制的 GitHub 地址。 */
 function showUpdateDialog(info) {
+  $("#up-title-text").textContent = "发现新版本";
   $("#up-ver").textContent = "v" + info.remote_version;
+  $("#up-subtitle").textContent = "本次更新内容";
   const ol = $("#up-items");
   ol.innerHTML = "";
   const items = (info.changelog_items && info.changelog_items.length)
@@ -1578,16 +1623,19 @@ function showUpdateDialog(info) {
     ol.appendChild(li);
   });
   $("#up-progress").style.display = "none";
+  $("#up-bar").style.width = "0%";
+  $("#up-progress-text").textContent = "正在下载…";
+  $("#up-fallback").style.display = "none";
+  $("#up-install").style.display = "";
   $("#up-actions").style.display = "";
   $("#update-mask").classList.add("show");
 
   $("#up-later").onclick = () => $("#update-mask").classList.remove("show");
   $("#up-install").onclick = async () => {
-    // Windows 单 exe 走程序内自替换更新；其他平台回退浏览器下载
+    // Windows 绿色版单 exe 走程序内自替换更新；其他情况直接回退手动下载。
     const isExe = /\.exe$/i.test(info.download_url || "");
     if (!isExe) {
-      if (info.release_url || info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.release_url || info.download_url } }).catch(() => {}); }
-      $("#update-mask").classList.remove("show");
+      showUpdateFallback(info, "当前平台不支持内置更新，请手动下载安装包。");
       return;
     }
     $("#up-actions").style.display = "none";
@@ -1608,15 +1656,39 @@ function showUpdateDialog(info) {
       $("#up-progress-text").textContent = "更新完成，正在切换到新版本…";
       // 旧窗口随即被服务端隐藏并退出，无需额外文案
     } catch (e) {
-      $("#up-progress").style.display = "none";
-      $("#up-actions").style.display = "";
-      toast("更新失败：" + e.message + "，可到 GitHub 手动下载", 5000);
-      if (info.release_url || info.download_url) { api("/api/open_url", { method: "POST", body: { url: info.release_url || info.download_url } }).catch(() => {}); }
+      showUpdateFallback(info, "内置更新失败：" + e.message);
     }
   };
 }
 
-$("#btn-version").addEventListener("click", () => checkUpdate(true));
+function showUpdateFallback(info = {}, reason = "") {
+  const version = info.remote_version && info.remote_version !== info.current_version
+    ? "v" + info.remote_version : "";
+  $("#up-title-text").textContent = "可手动下载更新";
+  $("#up-ver").textContent = version;
+  $("#up-subtitle").textContent = "备用下载方式";
+  const ol = $("#up-items");
+  ol.innerHTML = "";
+  const items = (info.changelog_items && info.changelog_items.length)
+    ? info.changelog_items : ["请复制下方 GitHub 地址，手动下载安装包"];
+  items.forEach(t => {
+    const li = document.createElement("li");
+    li.textContent = t;
+    ol.appendChild(li);
+  });
+  $("#up-progress").style.display = "none";
+  $("#up-fallback").style.display = "";
+  $("#up-fallback-url").value = updateFallbackUrl(info);
+  $("#up-fallback-reason").textContent = reason
+    ? reason
+    : "内置更新暂不可用，请使用 GitHub 地址手动下载。";
+  $("#up-actions").style.display = "";
+  $("#up-install").style.display = "none";
+  $("#update-mask").classList.add("show");
+  $("#up-later").onclick = () => $("#update-mask").classList.remove("show");
+}
+
+$("#btn-version").addEventListener("click", checkUpdate);
 
 
 /* ================= UI: Lucide + ambient canvas ================= */
@@ -1710,9 +1782,8 @@ document.addEventListener("pointerout", (e) => {
   if (S.topics && S.topics.length) renderTopics(S.topics);
   maybeShowWelcome();
   await resumeRunningTasks();
-  // 加载版本号并自动检查更新（不弹窗打扰用户）
+  // 仅加载版本号；更新检查由用户点击版本按钮触发，避免每次启动请求 GitHub。
   await loadVersion();
-  checkUpdate(false);  // 后台静默检查，有更新才弹窗
   refreshIcons();
   bindFieldTips();
 })();
