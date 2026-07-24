@@ -112,15 +112,20 @@ body {
   white-space: nowrap;
 }
 .brand-mark {
-  width: 30px; height: 30px; border-radius: 9px;
+  width: 32px; height: 32px; border-radius: 9px;
   display: grid; place-items: center;
-  background: #fff;
+  background: transparent;
   box-shadow: 0 4px 12px rgba(0,0,0,0.10);
   overflow: hidden;
   flex: none;
 }
+/* 主体尽量铺满圆角框（源图已裁白边，再略放大） */
 .brand-mark img {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scale(1.12);
+  transform-origin: center center;
 }
 .nav-steps { display: flex; gap: 4px; margin-left: 4px; flex: 1; }
 .nav-step {
@@ -247,7 +252,8 @@ body {
   padding: 24px;
   margin-bottom: 20px;
   transition: transform .3s var(--ease-out), box-shadow .3s, border-color .3s;
-  overflow: hidden;
+  /* visible：标题旁 tip 浮层不被裁切（圆角由 ::before 自身 radius 承担） */
+  overflow: visible;
 }
 .card::before {
   content: "";
@@ -342,11 +348,55 @@ select {
 }
 label.field { display: block; margin-bottom: 14px; position: relative; }
 label.field .cap {
-  display:block; font-size: 12px; color: var(--ink-2);
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--ink-2);
   margin-bottom: 6px; font-weight: 500;
 }
 label.field .fhint {
-  display:block; font-size: 11px; color: var(--ink-2); margin-top: 6px; line-height: 1.5; opacity: .85;
+  display: none; /* 说明改为标题旁 tip 图标，不再占布局高度 */
+}
+/* 标题旁说明：Lucide info，悬停由 JS 挂到 body 的 fixed 浮层（避免被裁切） */
+.field-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  flex: none;
+  color: var(--ink-3);
+  cursor: help;
+  border-radius: 50%;
+  vertical-align: middle;
+  z-index: 2;
+}
+.field-tip:hover,
+.field-tip:focus-visible { color: var(--blue); }
+.field-tip [data-lucide], .field-tip .lucide {
+  width: 14px; height: 14px; stroke-width: 2;
+}
+/* 全局 tip 气泡：固定定位，完整显示不被父级 overflow 裁切 */
+#field-tip-bubble {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(29,29,31,0.95);
+  color: #fff;
+  font-size: 12px; font-weight: 400; line-height: 1.55;
+  letter-spacing: 0;
+  white-space: normal;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.22);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+}
+#field-tip-bubble.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 /* Switch */
@@ -535,7 +585,43 @@ label.field .fhint {
   padding: 0 14px; height: 44px;
   border: none;
 }
-.toggle-row .cap { font-size: 13px; color: var(--ink); }
+.toggle-row .cap {
+  font-size: 13px; color: var(--ink);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+
+/* AI 腔命中定位列表 */
+.ai-hits-panel {
+  display: none;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: rgba(255,149,0,0.08);
+  border: 1px solid rgba(255,149,0,0.18);
+}
+.ai-hits-panel.show { display: block; }
+.ai-hits-panel .ai-hits-title {
+  font-size: 12px; font-weight: 600; color: #b25000; margin-bottom: 8px;
+}
+.ai-hits-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-hit-btn {
+  appearance: none; border: 1px solid rgba(255,149,0,0.35);
+  background: #fff; color: #8a3b00;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  transition: all .15s;
+}
+.ai-hit-btn:hover {
+  background: rgba(255,149,0,0.15);
+  border-color: rgba(255,149,0,0.55);
+}
+.ai-hit-btn .cnt {
+  font-weight: 500; color: var(--ink-2); margin-left: 4px; font-size: 11px;
+}
+#md-editor.ai-flash {
+  outline: 2px solid rgba(255,149,0,0.55);
+  box-shadow: 0 0 0 4px rgba(255,149,0,0.12);
+}
 
 /* Toast */
 #toast {
@@ -735,8 +821,8 @@ label.field .fhint {
 }
 @keyframes wenter { to { opacity: 1; transform: none; } }
 .welcome-card .logo {
-  width: 76px; height: 76px; margin: 0 auto 20px; border-radius: 18px;
-  background: #fff;
+  width: 80px; height: 80px; margin: 0 auto 20px; border-radius: 18px;
+  background: transparent;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 10px 28px rgba(0,0,0,0.10);
   opacity: 0; transform: scale(0.6);
@@ -744,7 +830,11 @@ label.field .fhint {
   overflow: hidden;
 }
 .welcome-card .logo img {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scale(1.1);
+  transform-origin: center center;
 }
 @keyframes wpop { to { opacity: 1; transform: scale(1); } }
 .welcome-card h2 {

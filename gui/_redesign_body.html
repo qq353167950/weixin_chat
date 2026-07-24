@@ -7,7 +7,7 @@
 <nav class="navbar">
   <div class="navbar-inner">
     <div class="brand">
-      <span class="brand-mark"><img src="/assets/app.png" alt="" width="30" height="30"></span>
+      <span class="brand-mark"><img src="/assets/app.png" alt="" width="32" height="32"></span>
       <span class="brand-text">公众号助手</span>
     </div>
     <div class="nav-steps">
@@ -107,7 +107,12 @@
         </div>
         <span class="chip" id="chip-ai" style="display:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none"></span>
       </div>
-      <label class="field"><span class="cap">写作补充要求（语气 / 行业 / 禁忌，可空）</span>
+      <label class="field">
+        <span class="cap">写作补充要求（语气 / 行业 / 禁忌，可空）
+          <span class="field-tip" data-tip="这里就是「补充要求」入口：写作时会写入提示词。设置里的「补充要求最大长度」只限制这段文字能写多长。" tabindex="0" role="img" aria-label="说明">
+            <i data-lucide="info"></i>
+          </span>
+        </span>
         <input type="text" id="in-user-extra" placeholder="例如：面向零基础读者，多举国内工具例子">
       </label>
       <div class="row">
@@ -119,6 +124,10 @@
       </div>
       <div style="height:12px"></div>
       <div class="console" id="log-article"></div>
+      <div class="ai-hits-panel" id="ai-hits-panel">
+        <div class="ai-hits-title">检测到的 AI 腔词语 · 点击可在编辑器中定位</div>
+        <div class="ai-hits-list" id="ai-hits-list"></div>
+      </div>
     </div>
     <div class="card" id="editor-card" style="display:none">
       <div class="row" style="justify-content:space-between; margin-bottom:12px">
@@ -332,7 +341,7 @@
 <!-- 首次启动引导 -->
 <div id="welcome-mask">
   <div class="welcome-card">
-    <div class="logo"><img src="/assets/app.png" alt="" width="52" height="52"></div>
+    <div class="logo"><img src="/assets/app.png" alt="" width="80" height="80"></div>
     <h2>欢迎使用公众号助手</h2>
     <p class="wsub">AI 选题写作 → 排版 → 一键进草稿箱<br>开始前，先花 1 分钟完成配置</p>
     <div class="welcome-steps">

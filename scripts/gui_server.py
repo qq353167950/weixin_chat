@@ -46,6 +46,7 @@ from article_writer import (  # noqa: E402
     llm_rank_topics,
     produce_article,
     scrub_citations,
+    scrub_llm_preamble,
 )
 from content_images import count_external_images, replace_content_images  # noqa: E402
 from env_store import read_env_values, update_env_file  # noqa: E402
@@ -935,6 +936,7 @@ def api_article_deai():
             temperature=0.4,
         )
         new_md = _strip_outer_fence(new_md)
+        new_md = scrub_llm_preamble(new_md)
         new_md = scrub_citations(new_md)
         # 安全阀：长度/标题/小标题/数字/图片任一被破坏则整单拒绝，原文不动
         issues = deai_rewrite_issues(md_text, new_md)
@@ -1047,12 +1049,14 @@ def api_cover_upload():
 
 
 # ---------------- 预览与发布 ----------------
-def _preview_payload(theme: str) -> dict:
+def _preview_payload(theme: str, title_override: str | None = None) -> dict:
     md = _article_path()
     if not md:
         raise RuntimeError("还没有文章")
     md_text = md.read_text(encoding="utf-8")
     title, body = extract_title_and_body(md_text)
+    if title_override:
+        title = title_override.strip()[:64]
     html = markdown_to_wechat_html(body, theme=theme)
     # 相对图片路径 → GUI 静态路由，浏览器里才能显示
     html_view = re.sub(r'src="(images/[^"]+)"', r'src="/runfile/\1"', html)
@@ -1081,11 +1085,11 @@ def api_render_text():
     theme = str(body.get("theme") or STATE["theme"])
     if theme not in THEMES:
         theme = "default"
-    _, body_md = extract_title_and_body(md_text) if md_text.lstrip().startswith("#") else ("", md_text)
+    title, body_md = extract_title_and_body(md_text) if md_text.lstrip().startswith("#") else ("", md_text)
     html = markdown_to_wechat_html(body_md, theme=theme)
     # 相对图片路径 → GUI 静态路由
     html = re.sub(r'src="(images/[^"]+)"', r'src="/runfile/\1"', html)
-    return jsonify({"html": html, "theme": theme})
+    return jsonify({"html": html, "theme": theme, "title": title})
 
 
 @app.post("/api/render")
@@ -1096,8 +1100,9 @@ def api_render():
         if theme not in THEMES:
             theme = "default"
         STATE["theme"] = theme
+    override_title = str(body.get("title") or "").strip() or None
     try:
-        return jsonify(_preview_payload(theme))
+        return jsonify(_preview_payload(theme, title_override=override_title))
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -1377,10 +1382,26 @@ SETTINGS_SCHEMA = [
         "fields": [
             {"key": "ARTICLE_FETCH_REFS", "label": "写作前抓取参考原文", "type": "toggle"},
             {"key": "ARTICLE_REF_MAX", "label": "最多抓几篇"},
-            {"key": "ARTICLE_REF_MAX_CHARS", "label": "参考文本总长度上限"},
-            {"key": "ARTICLE_MIN_CHARS", "label": "成稿最少可读字数"},
-            {"key": "ARTICLE_MAX_CHARS", "label": "成稿最多可读字数"},
-            {"key": "ARTICLE_USER_EXTRA_MAX_CHARS", "label": "补充要求最大长度"},
+            {
+                "key": "ARTICLE_REF_MAX_CHARS",
+                "label": "参考文本总长度上限",
+                "hint": "默认 20000。写作前抓取的参考原文总字数上限。",
+            },
+            {
+                "key": "ARTICLE_MIN_CHARS",
+                "label": "成稿最少可读字数",
+                "hint": "默认 1800。字数偏少会被拦截，可按风格下调。",
+            },
+            {
+                "key": "ARTICLE_MAX_CHARS",
+                "label": "成稿最多可读字数",
+                "hint": "默认 10000。AI 篇幅波动大，放宽可减少误拦截。",
+            },
+            {
+                "key": "ARTICLE_USER_EXTRA_MAX_CHARS",
+                "label": "补充要求最大长度",
+                "hint": "限制「文章」页顶部「写作补充要求」输入框写入提示词的字数，不是单独入口。",
+            },
             {"key": "ARTICLE_ILLUSTRATE", "label": "允许文中自动配图", "type": "toggle"},
             {"key": "ARTICLE_MAX_IMAGES", "label": "每篇最多配图数"},
         ],

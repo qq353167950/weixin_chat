@@ -44,6 +44,18 @@ from generate_cover import (
 
 TARGET_SIZE = (900, 383)
 
+# 封面生图提示词默认硬上限（非配置项）：覆盖 DALL·E 3 ~4000 字符与
+# 部分兼容端/万相更短限制，并与 LLM「under 120 English words」同量级留余量。
+COVER_PROMPT_MAX_CHARS = 1800
+
+
+def clamp_cover_prompt(prompt: str, max_chars: int = COVER_PROMPT_MAX_CHARS) -> str:
+    """截断过长的生图提示词，避免触发生图模型上限。"""
+    text = (prompt or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip()
+
 
 def load_env() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -88,7 +100,7 @@ def build_prompt(title: str, abstract: str = "", style: str = "editorial") -> st
         f"Wide cinematic 2.35:1 composition, "
         f"high quality, sharp, no watermark, no logo."
     )
-    return prompt[:1800]
+    return clamp_cover_prompt(prompt)
 
 
 def llm_cover_prompt(title: str, content: str) -> str:
@@ -115,7 +127,7 @@ def llm_cover_prompt(title: str, content: str) -> str:
     ).strip()
     if not prompt:
         raise RuntimeError("AI 返回空提示词")
-    return prompt[:1800]
+    return clamp_cover_prompt(prompt)
 
 
 def fit_cover(img: Image.Image, size: tuple[int, int] = TARGET_SIZE) -> Image.Image:
@@ -407,6 +419,8 @@ def generate_ai_cover(
             print(f"[封面] 定制提示词失败（{e}），改用通用提示词")
     if not prompt:
         prompt = build_prompt(title, abstract=abstract, style=style)
+    # 最终入 API 前统一硬截断（非配置项），防止超长触发生图上限
+    prompt = clamp_cover_prompt(prompt)
     print(f"[prompt] {prompt[:200]}...")
     check_cancelled()
     try:

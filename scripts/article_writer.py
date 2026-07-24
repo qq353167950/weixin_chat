@@ -40,8 +40,8 @@ AI_BANNED = [
 ]
 
 ARTICLE_MIN_CHARS = 1800
-ARTICLE_MAX_CHARS = 2500
-REFERENCE_BLOCK_MAX_CHARS = 12000
+ARTICLE_MAX_CHARS = 10000
+REFERENCE_BLOCK_MAX_CHARS = 20000
 USER_EXTRA_MAX_CHARS = 2000
 
 
@@ -55,8 +55,8 @@ def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int = 100) -
 
 
 def article_char_limits() -> tuple[int, int]:
-    minimum = _env_int("ARTICLE_MIN_CHARS", ARTICLE_MIN_CHARS, minimum=500, maximum=10000)
-    maximum = _env_int("ARTICLE_MAX_CHARS", ARTICLE_MAX_CHARS, minimum=minimum, maximum=20000)
+    minimum = _env_int("ARTICLE_MIN_CHARS", ARTICLE_MIN_CHARS, minimum=500, maximum=20000)
+    maximum = _env_int("ARTICLE_MAX_CHARS", ARTICLE_MAX_CHARS, minimum=minimum, maximum=50000)
     return minimum, maximum
 
 _UA_HEADERS = {
@@ -328,9 +328,14 @@ def build_article_prompt(
         "该段落之后独占一行；内容确实不适合配图（纯观点短文）就一张都不插\n"
         "18) 占位标记只用上面这一种格式，src 必须以 gen: 开头；不要写任何真实网址或本地路径\n"
         "\n"
-        "【输出】\n"
-        f"19) 正文约 {min_chars}-{max_chars} 字；只输出文章 Markdown，不要任何解释和分析过程\n"
-        "20) 不要照搬搜索素材原句，必须原创"
+        "【输出（硬性，违反即废稿）】\n"
+        f"19) 正文约 {min_chars}-{max_chars} 字\n"
+        "20) 只输出成稿 Markdown 本身：从第一个字符起必须是「# 标题」\n"
+        "21) 禁止任何写作前思考/自检/计划/复述用户要求，例如：\n"
+        "    「先核对…」「让我…」「按你的结构…」「再写观点文」「下面开始写」"
+        "「收到，我将…」「As an AI…」以及把指令用引号贴进正文\n"
+        "22) 全文只有一个一级标题（# ），禁止中途再起一个 # 标题重写\n"
+        "23) 不要照搬搜索素材原句，必须原创；不要 markdown 代码围栏包全文"
     )
     user = (
         "<article_request>\n"
@@ -349,7 +354,11 @@ def build_article_prompt(
             f"{user_extra[:max_user_extra]}\n"
             "</user_preferences>\n"
         )
-    user += "</article_request>\n请直接输出成稿 Markdown。"
+    user += (
+        "</article_request>\n"
+        "直接输出成稿。不要前言、不要核对说明、不要复述本提示。"
+        "第一个字符必须是 #。"
+    )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -407,7 +416,10 @@ def validate_generated_article(
         issues.append(f"二级小标题应为 3-5 个，实际 {len(h2)} 个")
     chars = article_text_char_count(md_text)
     if chars < min_chars or chars > max_chars:
-        issues.append(f"正文可读字数应为 {min_chars}-{max_chars}，实际 {chars}")
+        issues.append(
+            f"正文可读字数应为 {min_chars}-{max_chars}，实际 {chars}"
+            f"（请到「设置 → 文章增强」调整成稿最少/最多可读字数后重新生成）"
+        )
     return issues
 
 
@@ -484,7 +496,15 @@ class ArticleValidationError(RuntimeError):
     """LLM 成稿未通过结构/字数校验。"""
 
     def __init__(self, issues: list[str], md_text: str = ""):
-        super().__init__("生成内容未通过基础校验：" + "；".join(issues))
+        joined = "；".join(issues)
+        # 字数类问题额外给一句话指引，方便 GUI toast / CLI 直接看到怎么改
+        if any("可读字数" in x for x in issues):
+            joined += (
+                "。处理建议：打开「设置 → 文章增强」，"
+                "把「成稿最多可读字数」调高或「成稿最少可读字数」调低，"
+                "保存设置后再次点击「大模型写作」。"
+            )
+        super().__init__("生成内容未通过基础校验：" + joined)
         self.issues = list(issues)
         self.md_text = md_text
 
@@ -558,6 +578,8 @@ def produce_article(
     from markdown_to_wechat_html import _strip_outer_fence
 
     body = _strip_outer_fence(body)
+    if used_llm:
+        body = scrub_llm_preamble(body)
     if not body.lstrip().startswith("#"):
         body = f"# {topic.get('title') or '未命名选题'}\n\n{body}"
     body = scrub_citations(body)
@@ -629,6 +651,131 @@ def scrub_citations(md_text: str) -> str:
     text = re.sub(r"[ \t]+([，。；！？、）])", r"\1", text)
     for idx, code in enumerate(slots):
         text = text.replace(f"\x00CODE{idx}\x00", code)
+    return text
+
+
+# 模型偶发把「写作前思考 / 复述指令」泄漏进正文：行级特征
+_META_LINE_RE = re.compile(
+    r"(?:"
+    r"^(?:好的|收到|明白(?:了)?|当然|没问题)[，,：:\s].{0,40}(?:写|输出|成稿)"
+    r"|^(?:先|让我|我会|我先|下面我|接下来我|接下来|现在我)(?:先)?"
+    r"(?:核对|查|搜|整理|分析|阅读|看一下|确认|搜索)"
+    r"|按你的(?:结构|语气|要求|风格)|根据你的(?:要求|偏好|补充)"
+    r"|再按你的|写观点文|开始写稿|输出成稿|直接输出成稿"
+    r"|公开信息与\s*Git|写作前|自检说明"
+    r"|(?:As an AI|I(?:'ll| will) (?:write|check|verify)|Let me (?:check|write|verify))"
+    r")",
+    re.I,
+)
+
+
+def scrub_llm_preamble(md_text: str) -> str:
+    """剥离 LLM 泄漏的写作前思考 / 指令复述 / 半截重开标题。
+
+    典型坏稿：
+      # 假标题
+      先核对 XXX 的公开信息与 Git 地址，再按你的结构与语气要求写观点文。# 真标题
+      正文…
+    策略：
+      1) 句号后粘连的第二个 # 标题拆成换行
+      2) 多个一级标题时保留「后面更完整」的那一篇
+      3) 删掉纯 meta 行与被引号包裹的指令复述
+    """
+    if not (md_text or "").strip():
+        return md_text or ""
+
+    text = md_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    # 「……写观点文。# 真标题」→ 拆行，便于按 H1 切分
+    text = re.sub(r"([。！？；;…\n])\s*#\s+(\S)", r"\1\n\n# \2", text)
+    # 同行前半是 meta、后半突然 # 标题
+    text = re.sub(
+        r"(先核对[^#\n]{0,120}?)\s*#\s+(\S)",
+        r"\1\n\n# \2",
+        text,
+    )
+
+    lines = text.split("\n")
+    h1_idx = [
+        i
+        for i, ln in enumerate(lines)
+        if re.match(r"^#\s+\S", ln) and not ln.startswith("##")
+    ]
+
+    if len(h1_idx) >= 2:
+        # 选正文最长的一段（从该 H1 到下一 H1 / 文末）
+        best_i, best_score = h1_idx[-1], -1
+        for n, start in enumerate(h1_idx):
+            end = h1_idx[n + 1] if n + 1 < len(h1_idx) else len(lines)
+            segment = "\n".join(lines[start:end])
+            score = article_text_char_count(segment)
+            # 略偏向更靠后的完整稿（模型常「假开头 + 真正文」）
+            score += n * 50
+            if score >= best_score:
+                best_score, best_i = score, start
+        text = "\n".join(lines[best_i:])
+    elif h1_idx:
+        # 标题前的规划废话直接丢掉
+        text = "\n".join(lines[h1_idx[0] :])
+
+    # 去掉标题后、首个实质段落前的 meta 行；以及正文中整行 meta
+    cleaned: list[str] = []
+    for ln in text.split("\n"):
+        raw = ln
+        s = ln.strip()
+        if not s:
+            cleaned.append(raw)
+            continue
+        # 保留标题 / 列表 / 引用 / 代码 / 图片
+        if (
+            s.startswith("#")
+            or s.startswith("```")
+            or s.startswith("![")
+            or s.startswith(">")
+            or re.match(r"^[-*+]\s+", s)
+            or re.match(r"^\d+[.)]\s+", s)
+        ):
+            cleaned.append(raw)
+            continue
+
+        # 1) 先删行内「引号包住的指令复述」
+        def _drop_quoted_meta(m: re.Match) -> str:
+            inner = m.group(1)
+            return "" if _META_LINE_RE.search(inner) else m.group(0)
+
+        new_ln = re.sub(r"[\"“「]([^\"”」]{8,200})[\"”」]", _drop_quoted_meta, raw)
+        new_ln = re.sub(r"[ \t]{2,}", " ", new_ln)
+        new_ln = re.sub(r"[ \t]+([，。；！？、）])", r"\1", new_ln).strip()
+        s2 = new_ln.strip()
+        if not s2:
+            continue
+
+        # 2) 整行仍是规划句 → 丢掉；若只是前缀 meta + 正常正文，剥前缀
+        unquoted = s2.strip("\"“”'‘’「」")
+        if _META_LINE_RE.search(s2) or _META_LINE_RE.search(unquoted):
+            # 以 meta 特征开头的短句/规划句整行丢弃
+            if re.match(
+                r"^(?:先|让我|我会|我先|下面|接下来|现在|好的|收到|明白)",
+                s2,
+            ) or len(s2) < 90:
+                continue
+            parts = re.split(r"(?<=[。！？])", s2, maxsplit=1)
+            if (
+                len(parts) == 2
+                and _META_LINE_RE.search(parts[0])
+                and len(parts[1].strip()) > 20
+            ):
+                cleaned.append(parts[1].strip())
+                continue
+            # 正文里偶然出现「按你的要求」等短语但主体正常 → 保留去引号后的内容
+            if not re.match(r"^(?:先|让我|我会|我先|下面|接下来|现在)", s2):
+                cleaned.append(new_ln)
+            continue
+
+        cleaned.append(new_ln)
+
+    text = "\n".join(cleaned)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
 

@@ -186,7 +186,11 @@ async function nav(page) {
     const btn = $(`.nav-step[data-page=${p}]`) || $(`.env-pill[data-page=${p}]`);
     if (btn) btn.classList.toggle("active", p === page);
   });
-  if (page === "publish") renderPreview();
+  if (page === "publish") {
+    // 进发布页前若编辑器有未保存标题，先落盘再预览
+    if (MD_DIRTY) await saveArticle({ silent: true });
+    renderPreview({ forceTitle: $("#pub-title").dataset.edited === "1" });
+  }
   if (page === "settings") loadSettings();
   if (page === "article") syncArticlePage();
   if (page === "history") loadRunsPage();
@@ -405,21 +409,95 @@ async function loadArticle() {
   showAiChip(S.ai_hits || []);
   renderThemeSegEditor();
   refreshLivePreview();
+  // 加载成稿后三处标题对齐
+  const t = extractMdTitle(md);
+  if (t) applyTitleEverywhere(t, "load");
   await maybeRestoreDraft();   // 异常退出留下的本地草稿比服务端新时提示恢复
 }
 
 function showAiChip(hits) {
   const chip = $("#chip-ai");
+  const panel = $("#ai-hits-panel");
+  const list = $("#ai-hits-list");
   chip.style.display = "";
+  hits = Array.isArray(hits) ? hits : [];
   if (hits.length) {
     chip.className = "chip warn";
-    chip.textContent = `AI腔 ${hits.length} 处：${hits.slice(0, 4).join("、")}`;
+    chip.textContent = `AI腔 ${hits.length} 处：${hits.slice(0, 6).join("、")}`;
+    chip.title = hits.join("、");
     $("#btn-deai").style.display = "";      // 有命中才亮出一键去味
+    // 列出全部命中词，点击定位到编辑器中的下一处
+    if (panel && list) {
+      panel.classList.add("show");
+      list.innerHTML = "";
+      const md = ($("#md-editor") && $("#md-editor").value) || "";
+      hits.forEach((phrase) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ai-hit-btn";
+        const count = md.split(phrase).length - 1;
+        btn.innerHTML = "";
+        const label = document.createElement("span");
+        label.textContent = phrase;
+        btn.appendChild(label);
+        if (count > 0) {
+          const c = document.createElement("span");
+          c.className = "cnt";
+          c.textContent = "×" + count;
+          btn.appendChild(c);
+        }
+        btn.title = "点击定位到文中「" + phrase + "」";
+        btn.addEventListener("click", () => jumpToAiPhrase(phrase));
+        list.appendChild(btn);
+      });
+    }
   } else {
     chip.className = "chip ok";
     chip.textContent = "AI腔检测通过";
+    chip.title = "";
     $("#btn-deai").style.display = "none";
+    if (panel && list) {
+      panel.classList.remove("show");
+      list.innerHTML = "";
+    }
   }
+}
+
+/* 在 Markdown 编辑器中定位并选中 AI 腔词语（从上次位置继续找下一处） */
+const _aiSeekPos = {};
+function jumpToAiPhrase(phrase) {
+  const ed = $("#md-editor");
+  if (!ed) return;
+  const text = ed.value || "";
+  if (!phrase || !text.includes(phrase)) {
+    toast("正文里暂时找不到「" + phrase + "」");
+    return;
+  }
+  // 确保编辑器可见
+  const card = $("#editor-card");
+  if (card && card.style.display === "none") card.style.display = "";
+  let from = _aiSeekPos[phrase] || 0;
+  let idx = text.indexOf(phrase, from);
+  if (idx < 0) {
+    from = 0;
+    idx = text.indexOf(phrase, 0);
+  }
+  if (idx < 0) return;
+  _aiSeekPos[phrase] = idx + phrase.length;
+  ed.focus();
+  ed.setSelectionRange(idx, idx + phrase.length);
+  // 滚到选区附近（textarea 近似）
+  try {
+    const before = text.slice(0, idx);
+    const lines = before.split("\n").length;
+    const lineHeight = 22;
+    ed.scrollTop = Math.max(0, (lines - 4) * lineHeight);
+  } catch (_) {}
+  ed.classList.remove("ai-flash");
+  void ed.offsetWidth;
+  ed.classList.add("ai-flash");
+  setTimeout(() => ed.classList.remove("ai-flash"), 900);
+  toast("已定位：「" + phrase + "」· 再点可跳下一处", 2200);
 }
 
 /* 手动检测 AI 味（对编辑器当前内容） */
@@ -429,7 +507,11 @@ $("#btn-check-ai").addEventListener("click", async () => {
   try {
     const r = await api("/api/article/check_ai", { method: "POST", body: { md }});
     showAiChip(r.ai_hits || []);
-    toast(r.ai_hits.length ? `检测到 ${r.ai_hits.length} 处 AI 腔` : "检测通过，没有 AI 腔");
+    if (r.ai_hits && r.ai_hits.length) {
+      toast(`检测到 ${r.ai_hits.length} 处 AI 腔：${r.ai_hits.join("、")}`, 5000);
+    } else {
+      toast("检测通过，没有 AI 腔");
+    }
   } catch (e) { toast("检测失败：" + e.message, 3500); }
 });
 
@@ -459,7 +541,31 @@ async function writeArticle(extraHint) {
     await loadArticle();
     showAiChip(r.ai_hits || []);
     toast("文章已生成，可直接编辑");
-  } catch (e) { toast("失败：" + e.message, 4000); }
+  } catch (e) {
+    const msg = e.message || String(e);
+    // 字数/结构校验失败：给足时间读提示，并可一键跳转设置改阈值
+    if (/可读字数|基础校验|成稿最/.test(msg)) {
+      toast(msg, 10000);
+      const go = await askConfirm(
+        "成稿未通过字数校验",
+        "需要把「设置 → 文章增强」里的成稿最少/最多可读字数改成覆盖本次实际字数的区间，保存后再生成。\n\n是否现在打开设置？"
+      );
+      if (go) {
+        await nav("settings");
+        setTimeout(() => {
+          $$("#settings-body .set-group").forEach(g => {
+            const t = g.querySelector("h4")?.textContent || "";
+            if (t.includes("文章增强")) {
+              g.classList.add("attention");
+              g.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+          });
+        }, 350);
+      }
+    } else {
+      toast("失败：" + msg, 4000);
+    }
+  }
 }
 $("#btn-write").addEventListener("click", () => writeArticle());
 $("#btn-rewrite").addEventListener("click", () => writeArticle("请换个开头和案例重写，更口语"));
@@ -475,6 +581,12 @@ async function saveArticle({ silent = false } = {}) {
     setDirty(false);
     localStorage.removeItem("draft-backup");   // 已落盘，本地兜底可清
     await refreshState();
+    // 保存后把 # 标题同步到发布页（避免只改编辑器、发布页仍是旧标题）
+    const t = extractMdTitle(md);
+    if (t) {
+      setPubTitleUI(t, { markEdited: false });
+      setArticleHeaderTitle(t);
+    }
     if (!silent) toast("已保存");
     return true;
   } catch (e) {
@@ -545,11 +657,20 @@ async function maybeRestoreDraft() {
   } catch (_) { localStorage.removeItem("draft-backup"); }
 }
 
+let _editorTitleTimer = null;
 $("#md-editor").addEventListener("input", () => {
   if (!MD_DIRTY) setDirty(true);   // 只在状态翻转时走 pywebview 桥，减少每键开销
-  setArtChars($("#md-editor").value);
+  const md = $("#md-editor").value;
+  setArtChars(md);
   if (!_composing) scheduleLivePreview();
   saveDraftLocal();
+  // 编辑器里改了 # 一级标题 → 同步到发布页 / 文章页标题 / 预览
+  clearTimeout(_editorTitleTimer);
+  _editorTitleTimer = setTimeout(() => {
+    if (_titleSyncing) return;
+    const t = extractMdTitle(md);
+    if (t) applyTitleEverywhere(t, "editor");
+  }, 450);
 });
 
 /* 复制排版后内容：富文本进剪贴板，可直接粘贴进公众号编辑器 */
@@ -816,24 +937,137 @@ function updateCharCount(id) {
   cnt.textContent = `${n}/${max}`;
   cnt.className = "char-count" + (n >= max ? " full" : n >= max * 0.85 ? " near" : "");
 }
+
+/* —— 标题三处同步：编辑器 # 标题 · 发布页输入框 · 手机预览 —— */
+function extractMdTitle(md) {
+  const m = String(md || "").match(/^#\s+(.+)$/m);
+  return m ? m[1].trim().slice(0, 64) : "";
+}
+function replaceMdTitle(md, title) {
+  const t = String(title || "").trim().slice(0, 64);
+  if (!t) return md;
+  const text = String(md || "");
+  if (/^#\s+/m.test(text)) return text.replace(/^#\s+.+$/m, "# " + t);
+  return "# " + t + "\n\n" + text.replace(/^\s+/, "");
+}
+function setPubTitleUI(title, { markEdited = false } = {}) {
+  const el = $("#pub-title");
+  if (!el) return;
+  el.value = String(title || "").slice(0, 64);
+  if (markEdited) el.dataset.edited = "1";
+  else delete el.dataset.edited;
+  updateCharCount("pub-title");
+}
+function setArticleHeaderTitle(title) {
+  const t = String(title || "").trim();
+  if (!t) return;
+  if (S.topic) S.topic.title = t;
+  const el = $("#art-topic-title");
+  if (el) el.textContent = t;
+}
+
+/**
+ * source: "pub" | "editor" | "load"
+ * - pub：发布页改标题 → 写回编辑器/#行 + 落盘 + 刷预览
+ * - editor：编辑器改 # 标题 → 同步发布页（未手动锁时）+ 刷预览
+ * - load：从文件加载 → 三处对齐，不标 edited
+ */
+let _titleSyncing = false;
+let _pubTitleTimer = null;
+let _pubPreviewTimer = null;
+async function applyTitleEverywhere(title, source) {
+  const t = String(title || "").trim().slice(0, 64);
+  if (!t || _titleSyncing) return;
+  _titleSyncing = true;
+  try {
+    if (source === "pub" || source === "load") {
+      setPubTitleUI(t, { markEdited: source === "pub" });
+    } else if (source === "editor") {
+      // 编辑器改了标题：覆盖发布页显示（发布页若刚手改过也会被编辑器覆盖，保证同源）
+      setPubTitleUI(t, { markEdited: false });
+    }
+    setArticleHeaderTitle(t);
+
+    if (source === "pub") {
+      const ed = $("#md-editor");
+      let md = ed ? ed.value : "";
+      if (!md.trim() && S.has_article) {
+        try {
+          const r = await api("/api/article");
+          md = r.md || "";
+          if (ed && md) ed.value = md;
+        } catch (_) {}
+      }
+      if (md.trim()) {
+        const next = replaceMdTitle(md, t);
+        if (ed && next !== ed.value) {
+          ed.value = next;
+          setArtChars(next);
+          if (!MD_DIRTY) setDirty(true);
+          scheduleLivePreview();
+        }
+        // 落盘，保证预览/再次打开/发布都读到新标题
+        try {
+          await api("/api/article", { method: "POST", body: { md: next || md } });
+          setDirty(false);
+          localStorage.removeItem("draft-backup");
+          await refreshState();
+        } catch (e) {
+          toast("标题同步保存失败：" + e.message, 3500);
+        }
+      }
+    }
+
+    if ($("#page-publish") && $("#page-publish").classList.contains("show")) {
+      schedulePublishPreview();
+    }
+  } finally {
+    _titleSyncing = false;
+  }
+}
+function schedulePublishPreview() {
+  clearTimeout(_pubPreviewTimer);
+  _pubPreviewTimer = setTimeout(() => renderPreview({ forceTitle: true }), 280);
+}
+
 Object.keys(PUB_LIMITS).forEach(id => {
   $(`#${id}`).addEventListener("input", (e) => {
     e.target.dataset.edited = "1";
     updateCharCount(id);
+    if (id === "pub-title") {
+      clearTimeout(_pubTitleTimer);
+      _pubTitleTimer = setTimeout(() => {
+        applyTitleEverywhere(e.target.value, "pub");
+      }, 400);
+    } else if (id === "pub-digest" || id === "pub-author") {
+      // 摘要/作者仅影响发布预览展示（作者叠在预览页）
+      if (id === "pub-author") schedulePublishPreview();
+    }
   });
 });
 
-async function renderPreview() {
+async function renderPreview({ forceTitle = false } = {}) {
   if (!S.has_article) { $("#preview-frame").srcdoc = "<p style='padding:40px;color:#999;font-family:sans-serif'>还没有文章</p>"; return; }
   try {
-    const r = await api("/api/render", { method: "POST", body: { theme: S.theme }});
+    const pubTitle = ($("#pub-title").value || "").trim();
+    const useOverride = forceTitle || $("#pub-title").dataset.edited === "1";
+    const body = { theme: S.theme };
+    if (useOverride && pubTitle) body.title = pubTitle;
+    const r = await api("/api/render", { method: "POST", body });
     $("#preview-frame").srcdoc = r.preview;
+    // 标题：若用户正在编辑发布页标题则保留输入，否则用文件/覆盖结果回填
+    if ($("#pub-title").dataset.edited !== "1") {
+      setPubTitleUI(r.title || "", { markEdited: false });
+      setArticleHeaderTitle(r.title || "");
+    } else if (forceTitle && pubTitle) {
+      // 已带 override 渲染，输入框保持用户值
+      updateCharCount("pub-title");
+    }
     const fill = (id, val) => {
       const el = $(`#${id}`);
       if (el.dataset.edited !== "1") el.value = val;
       updateCharCount(id);
     };
-    fill("pub-title", r.title);
     fill("pub-digest", r.digest);
     fill("pub-author", r.author || "");
   } catch (e) { toast(e.message, 3000); }
@@ -1052,6 +1286,79 @@ $("#btn-my-ip").addEventListener("click", async (e) => {
 
 /* ================= 页5 设置 ================= */
 let SETTINGS_SCHEMA = null;
+/* 设置项标题：可选 Lucide 圆圈感叹号，悬停显示说明（不占布局高度） */
+function fieldCapHtml(label, hint) {
+  const safeLabel = String(label || "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (!hint) return `<span class="cap">${safeLabel}</span>`;
+  const safeTip = String(hint)
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<span class="cap">${safeLabel}`
+    + `<span class="field-tip" data-tip="${safeTip}" tabindex="0" role="img" aria-label="${safeTip}">`
+    + `<i data-lucide="info"></i></span></span>`;
+}
+
+/* tip 浮层：挂 body + fixed，避免被 .card overflow / 顶栏挡住 */
+function ensureFieldTipBubble() {
+  let el = document.getElementById("field-tip-bubble");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "field-tip-bubble";
+    el.setAttribute("role", "tooltip");
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function placeFieldTipBubble(anchor) {
+  const tip = (anchor.getAttribute("data-tip") || "").trim();
+  if (!tip) return;
+  const bubble = ensureFieldTipBubble();
+  bubble.textContent = tip;
+  bubble.classList.add("show");
+  // 先显示再量尺寸
+  const r = anchor.getBoundingClientRect();
+  const bw = bubble.offsetWidth;
+  const bh = bubble.offsetHeight;
+  const gap = 8;
+  const vw = window.innerWidth;
+  // 默认朝上：不遮挡下方输入框与表单内容
+  let top = r.top - gap - bh;
+  let placeAbove = true;
+  // 仅当上方不够时才落到下方
+  if (top < 8) {
+    top = r.bottom + gap;
+    placeAbove = false;
+  }
+  // 水平居中于图标，并夹在视口内
+  let left = r.left + r.width / 2 - bw / 2;
+  left = Math.max(8, Math.min(left, vw - bw - 8));
+  bubble.style.top = Math.round(top) + "px";
+  bubble.style.left = Math.round(left) + "px";
+  bubble.dataset.place = placeAbove ? "above" : "below";
+}
+function hideFieldTipBubble() {
+  const bubble = document.getElementById("field-tip-bubble");
+  if (bubble) bubble.classList.remove("show");
+}
+function bindFieldTips(root) {
+  const scope = root || document;
+  scope.querySelectorAll(".field-tip[data-tip]").forEach((el) => {
+    if (el._tipBound) return;
+    el._tipBound = true;
+    el.addEventListener("mouseenter", () => placeFieldTipBubble(el));
+    el.addEventListener("mouseleave", hideFieldTipBubble);
+    el.addEventListener("focus", () => placeFieldTipBubble(el));
+    el.addEventListener("blur", hideFieldTipBubble);
+  });
+}
+document.addEventListener("scroll", hideFieldTipBubble, true);
+window.addEventListener("resize", hideFieldTipBubble);
+// 初始页面上的 tip（文章页补充要求等）
+document.addEventListener("DOMContentLoaded", () => bindFieldTips());
+// 脚本在 DOM 末尾执行时 DOM 已就绪
+if (document.readyState !== "loading") setTimeout(() => bindFieldTips(), 0);
+
 async function loadSettings() {
   const { schema, values } = await api("/api/settings");
   SETTINGS_SCHEMA = schema;
@@ -1070,20 +1377,19 @@ async function loadSettings() {
       if (f.type === "toggle") {
         const row = document.createElement("div");
         row.className = "toggle-row";
-        row.innerHTML = `<span class="cap">${f.label}</span>
+        row.innerHTML = `${fieldCapHtml(f.label, f.hint)}
           <label class="switch"><input type="checkbox" data-key="${f.key}" ${val === "1" ? "checked" : ""}>
           <span class="track"></span></label>`;
         grid.appendChild(row);
       } else if (f.type === "select") {
         const lab = document.createElement("label");
         lab.className = "field";
-        lab.innerHTML = `<span class="cap">${f.label}</span>
+        lab.innerHTML = `${fieldCapHtml(f.label, f.hint)}
           <select data-key="${f.key}">${f.options.map(o => {
             // 选项可为 "value" 或 ["value", "中文标签"]
             const [v, lbl] = Array.isArray(o) ? o : [o, o];
             return `<option value="${v}" ${v === val ? "selected" : ""}>${lbl}</option>`;
           }).join("")}</select>`;
-        if (f.hint) lab.innerHTML += `<span class="fhint">${f.hint}</span>`;
         grid.appendChild(lab);
       } else {
         const lab = document.createElement("label");
@@ -1093,7 +1399,7 @@ async function loadSettings() {
           .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         if (f.secret) {
           // 密钥输入框：带眼睛按钮，点击切换明文/圆点
-          lab.innerHTML = `<span class="cap">${f.label}</span>
+          lab.innerHTML = `${fieldCapHtml(f.label, f.hint)}
             <span class="secret-wrap">
               <input type="password" data-key="${f.key}" value="${safeVal}"
                      placeholder="••••••" autocomplete="off">
@@ -1110,13 +1416,11 @@ async function loadSettings() {
               if (window.lucide) lucide.createIcons({ nodes: [ev.currentTarget] });
             }
           });
-          if (window.lucide) lucide.createIcons({ nodes: [lab] });
         } else {
-          lab.innerHTML = `<span class="cap">${f.label}</span>
+          lab.innerHTML = `${fieldCapHtml(f.label, f.hint)}
             <input type="text" data-key="${f.key}" value="${safeVal}"
                    placeholder="" autocomplete="off">`;
         }
-        if (f.hint) lab.innerHTML += `<span class="fhint">${f.hint}</span>`;
         grid.appendChild(lab);
       }
     });
@@ -1124,6 +1428,7 @@ async function loadSettings() {
     box.appendChild(g);
   });
   if (window.lucide) lucide.createIcons();
+  bindFieldTips(box);
 }
 
 $("#btn-save-settings").addEventListener("click", async () => {
@@ -1397,6 +1702,7 @@ document.addEventListener("pointerout", (e) => {
 (async function init() {
   initAmbient();
   refreshIcons();
+  bindFieldTips();
   await refreshState();
   renderThemeSeg();
   $("#in-domain").value = "";
@@ -1408,6 +1714,7 @@ document.addEventListener("pointerout", (e) => {
   await loadVersion();
   checkUpdate(false);  // 后台静默检查，有更新才弹窗
   refreshIcons();
+  bindFieldTips();
 })();
 </script>
 </body>

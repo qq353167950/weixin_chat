@@ -212,10 +212,32 @@ def test_scrub_citations() -> None:
     keep = scrub_citations("看[这篇](https://mp.weixin.qq.com/s/x)就够")
     check("正常文字链接保留", "mp.weixin.qq.com" in keep and "[这篇]" in keep, keep)
 
+    from article_writer import scrub_llm_preamble
+
+    leak = (
+        "# AI编程从辅助变主力，它做对了啥\n\n"
+        "先核对 MonkeyCode 的公开信息与 Git 地址，再按你的结构与语气要求写观点文。"
+        "# 云端一站式之后，AI编程才算扛活\n\n"
+        "2026 年再聊 AI 写代码，空气里的味道已经变了。大家更爱聊任务能不能一路走到 PR。\n"
+    )
+    cleaned = scrub_llm_preamble(leak)
+    check("剥离写作前思考保留真标题", "云端一站式之后" in cleaned and cleaned.lstrip().startswith("#"), cleaned[:80])
+    check("假标题与 meta 句已去掉", "先核对" not in cleaned and "AI编程从辅助变主力" not in cleaned, cleaned[:120])
+    quoted = (
+        "# 标题\n\n"
+        "正文开头正常。"
+        "“先核对 MonkeyCode 的公开信息与 Git 地址，再按你的结构与语气要求写观点文。”"
+        " 接着继续讲观点。\n"
+    )
+    q2 = scrub_llm_preamble(quoted)
+    check("行内引号复述指令被剔除", "先核对" not in q2 and "接着继续讲观点" in q2, q2)
+
 
 def test_article_quality_limits() -> None:
     print("[7b] 文章生成限制与结构校验")
-    # 每段约 700 字，三段合计约 2100 字，落在默认 1800-2500 区间
+    # 每段约 700 字，三段合计约 2100 字，落在默认 1800-4000 区间
+    from article_writer import article_char_limits
+
     sec = "这是有具体信息的正文，解释方法、边界和可执行步骤。"  # 24 字
     good = (
         "# 一个合适的文章标题\n\n"
@@ -224,7 +246,8 @@ def test_article_quality_limits() -> None:
         f"## 第三节\n\n{sec * 30}\n"
     )
     chars = article_text_char_count(good)
-    check("可读字数统计排除 Markdown 标记", 1800 <= chars <= 2500, f"实际 {chars}")
+    min_c, max_c = article_char_limits()
+    check("可读字数统计排除 Markdown 标记", min_c <= chars <= max_c, f"实际 {chars} 区间 {min_c}-{max_c}")
     check("完整文章通过结构校验", not validate_generated_article(good), str(validate_generated_article(good)))
     bad = "# 太短\n\n## 只有一节\n\n内容不足。"
     issues = validate_generated_article(bad)
