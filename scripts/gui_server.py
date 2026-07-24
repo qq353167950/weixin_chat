@@ -380,6 +380,29 @@ def assets_file(name: str):
     return send_from_directory(base, name)
 
 
+@app.get("/vendor/<path:name>")
+def vendor_file(name: str):
+    """离线第三方前端库（如 lucide），打包进 assets/vendor，不走 CDN。"""
+    allowed = {"lucide.min.js"}
+    base = (ASSETS / "assets" / "vendor").resolve()
+    # 兼容源码布局：assets/vendor 与打包后 _MEIPASS/assets/vendor
+    if not base.is_dir():
+        alt = (ASSETS / "vendor").resolve()
+        if alt.is_dir():
+            base = alt
+    target = (base / name).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return jsonify({"error": "not found"}), 404
+    if name not in allowed or not target.is_file():
+        return jsonify({"error": "not found"}), 404
+    resp = send_from_directory(base, name)
+    # 版本化文件名固定，允许长期缓存；升级靠换文件名或 exe 整体更新
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
+
 @app.get("/runfile/<path:relpath>")
 def runfile(relpath: str):
     with _LOCK:

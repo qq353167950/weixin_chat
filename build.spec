@@ -28,6 +28,8 @@ datas = [
     (".env.example", "."),
     ("assets/app.png", "assets"),
     ("assets/app.ico", "assets"),
+    # 离线前端依赖（Lucide 等），运行时由 /vendor/* 提供
+    ("assets/vendor", "assets/vendor"),
 ]
 hiddenimports = [
     # ddgs 兜底搜索为动态导入，静态分析发现不了
