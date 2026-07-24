@@ -39,14 +39,12 @@ load_dotenv(ROOT / ".env")
 load_dotenv()
 
 from article_writer import (  # noqa: E402
-    build_article_prompt,
+    article_text_char_count,
+    deai_rewrite_issues,
     detect_ai_phrases,
-    fetch_reference_articles,
     illustrate_article,
     llm_rank_topics,
-    local_fallback_article,
-    refs_to_prompt_block,
-    resolve_inline_images,
+    produce_article,
     scrub_citations,
 )
 from content_images import count_external_images, replace_content_images  # noqa: E402
@@ -351,6 +349,11 @@ def index():
 
 @app.get("/favicon.ico")
 def favicon():
+    """优先返回 assets/app.ico / app.png，缺失时回退 SVG「稿」。"""
+    for name, mime in (("app.ico", "image/x-icon"), ("app.png", "image/png")):
+        p = ASSETS / "assets" / name
+        if p.exists():
+            return send_from_directory(p.parent, p.name, mimetype=mime)
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
         '<rect width="64" height="64" rx="14" fill="#0071e3"/>'
@@ -359,6 +362,21 @@ def favicon():
         "</svg>"
     )
     return app.response_class(svg, mimetype="image/svg+xml")
+
+
+@app.get("/assets/<path:name>")
+def assets_file(name: str):
+    """静态资源：应用图标等（白名单文件名，防路径穿越）。"""
+    allowed = {"app.png", "app.ico", "app-source.png"}
+    base = (ASSETS / "assets").resolve()
+    target = (base / name).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return jsonify({"error": "not found"}), 404
+    if name not in allowed or not target.is_file():
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(base, name)
 
 
 @app.get("/runfile/<path:relpath>")
@@ -395,7 +413,7 @@ def api_state():
             "topic": topic,
             "has_article": bool(md_text),
             "article_title": title,
-            "article_chars": len(md_text),
+            "article_chars": article_text_char_count(md_text) if md_text else 0,
             "ai_hits": detect_ai_phrases(md_text) if md_text else [],
             "has_cover": cover,
             "theme": theme,
@@ -826,60 +844,21 @@ def api_article_write():
         )
 
     def job(log):
-        if mode == "fallback":
-            log("生成本地提纲稿（不调用写作模型）")
-            md_text = local_fallback_article(topic)
-        else:
-            refs_block = ""
-            if os.getenv("ARTICLE_FETCH_REFS", "1") != "0":
-                raw = wd / "search_raw.json"
-                materials = []
-                if raw.exists():
-                    try:
-                        materials = json.loads(raw.read_text(encoding="utf-8")).get(
-                            "materials"
-                        ) or []
-                    except Exception:
-                        materials = []
-                if materials:
-                    log("抓取参考文章原文（学语感，不抄袭）…")
-                    refs = fetch_reference_articles(materials, topic, log=log)
-                    if refs:
-                        refs_block = refs_to_prompt_block(refs)
-                        (wd / "reference_articles.json").write_text(
-                            json.dumps(refs, ensure_ascii=False, indent=2),
-                            encoding="utf-8",
-                        )
-                        log(f"抓到 {len(refs)} 篇参考原文")
+        prod_mode = "fallback" if mode == "fallback" else "llm"
+        if prod_mode == "llm":
             log("正在写稿（可能需要 1-2 分钟）…")
-            md_text = llm_chat(
-                build_article_prompt(topic, topic.get("user_extra", ""), refs_block)
-            )
-        # LLM 偶尔把全文包在 ```markdown 围栏里 → 渲染成一整个代码框
-        md_text = _strip_outer_fence(md_text)
-        if not md_text.lstrip().startswith("#"):
-            md_text = f"# {topic['title']}\n\n{md_text}"
-        # 兜底：清掉模型塞进正文的引用角标链接
-        md_text = scrub_citations(md_text)
-        # 写作时就地标注的配图：同一任务内直接生图替换（图文一起出）；
-        # 未配置生图则把占位标记清掉，正文不留破图链接
-        img_report: list[str] = []
-        try:
-            md_text, img_report = resolve_inline_images(md_text, wd, log=log)
-            for line in img_report:
-                log(line)
-        except TaskCancelledHook:
-            raise
-        except Exception as e:
-            log(f"配图阶段出错（不影响正文）：{e}")
-        (wd / "article.md").write_text(md_text, encoding="utf-8")
-        hits = detect_ai_phrases(md_text)
-        if hits:
-            log(f"AI腔检测：命中 {len(hits)} 个（{'、'.join(hits[:6])}）")
-        else:
-            log("AI腔检测：干净")
-        log(f"完成，共 {len(md_text)} 字")
-        return {"chars": len(md_text), "ai_hits": hits, "images": img_report}
+        result = produce_article(
+            topic,
+            wd,
+            mode=prod_mode,
+            log=log,
+            strict_validation=(prod_mode == "llm"),
+        )
+        return {
+            "chars": result["chars"],
+            "ai_hits": result["ai_hits"],
+            "images": result.get("images") or [],
+        }
 
     task = _run_task("生成文章", job)
     return jsonify({"task": task["id"]})
@@ -888,7 +867,12 @@ def api_article_write():
 @app.get("/api/article")
 def api_article_get():
     md = _article_path()
-    return jsonify({"md": md.read_text(encoding="utf-8") if md else ""})
+    md_text = md.read_text(encoding="utf-8") if md else ""
+    return jsonify({
+        "md": md_text,
+        "chars": article_text_char_count(md_text) if md_text else 0,
+        "raw_chars": len(md_text),
+    })
 
 
 @app.post("/api/article")
@@ -900,7 +884,12 @@ def api_article_save():
     wd = _ensure_run()
     (wd / "article.md").write_text(md_text, encoding="utf-8")
     _touch_inuse()   # 心跳：保护本目录不被另一实例的清理误删
-    return jsonify({"ok": True, "ai_hits": detect_ai_phrases(md_text)})
+    return jsonify({
+        "ok": True,
+        "ai_hits": detect_ai_phrases(md_text),
+        "chars": article_text_char_count(md_text),
+        "raw_chars": len(md_text),
+    })
 
 
 @app.post("/api/article/check_ai")
@@ -947,10 +936,13 @@ def api_article_deai():
         )
         new_md = _strip_outer_fence(new_md)
         new_md = scrub_citations(new_md)
-        # 安全阀：长度骤降说明模型丢内容，拒绝采用
-        if len(new_md) < len(md_text) * 0.7:
+        # 安全阀：长度/标题/小标题/数字/图片任一被破坏则整单拒绝，原文不动
+        issues = deai_rewrite_issues(md_text, new_md)
+        if issues:
             raise RuntimeError(
-                f"改写后长度异常（{len(md_text)}→{len(new_md)} 字），已放弃本次结果，原文未动"
+                "去 AI 味结果未通过安全校验（"
+                + "；".join(issues)
+                + "），已放弃本次结果，原文未动"
             )
         md.write_text(new_md, encoding="utf-8")
         left = detect_ai_phrases(new_md)
@@ -958,7 +950,11 @@ def api_article_deai():
             log(f"完成。残留 {len(left)} 个：{'、'.join(left[:6])}（可再点一次）")
         else:
             log("完成，AI 腔已清零 ✓")
-        return {"ai_hits": left, "changed": True}
+        return {
+            "ai_hits": left,
+            "changed": True,
+            "chars": article_text_char_count(new_md),
+        }
 
     task = _run_task("去除AI味", job)
     return jsonify({"task": task["id"]})
@@ -1377,10 +1373,14 @@ SETTINGS_SCHEMA = [
     },
     {
         "group": "文章增强",
-        "desc": "降 AI 味与自动配图",
+        "desc": "降 AI 味、字数校验与自动配图",
         "fields": [
             {"key": "ARTICLE_FETCH_REFS", "label": "写作前抓取参考原文", "type": "toggle"},
             {"key": "ARTICLE_REF_MAX", "label": "最多抓几篇"},
+            {"key": "ARTICLE_REF_MAX_CHARS", "label": "参考文本总长度上限"},
+            {"key": "ARTICLE_MIN_CHARS", "label": "成稿最少可读字数"},
+            {"key": "ARTICLE_MAX_CHARS", "label": "成稿最多可读字数"},
+            {"key": "ARTICLE_USER_EXTRA_MAX_CHARS", "label": "补充要求最大长度"},
             {"key": "ARTICLE_ILLUSTRATE", "label": "允许文中自动配图", "type": "toggle"},
             {"key": "ARTICLE_MAX_IMAGES", "label": "每篇最多配图数"},
         ],

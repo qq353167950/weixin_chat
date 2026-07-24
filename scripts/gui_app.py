@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app_paths import app_root  # noqa: E402
+from app_paths import app_root, asset_dir  # noqa: E402
 
 # 窗口化 exe（console=False）里 stdout/stderr 为 None，任何 print 都会抛
 # AttributeError；重定向到日志文件，业务模块的 print 原样保留
@@ -149,10 +149,21 @@ def confirm_native(text: str) -> bool:
 
 
 def _tray_image():
-    """托盘图标：蓝底「稿」字（与应用图标一致）。"""
+    """托盘图标：优先用 assets/app.png，缺失时回退蓝底「稿」。"""
     from PIL import Image, ImageDraw, ImageFont
 
     size = 64
+    for cand in (
+        asset_dir() / "assets" / "app.png",
+        app_root() / "assets" / "app.png",
+    ):
+        try:
+            if cand.exists():
+                img = Image.open(cand).convert("RGBA")
+                return img.resize((size, size), Image.Resampling.LANCZOS)
+        except Exception:
+            pass
+
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([0, 0, size - 1, size - 1], radius=14, fill=(0, 113, 227, 255))

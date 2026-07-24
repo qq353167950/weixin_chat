@@ -29,19 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from content_images import count_external_images, replace_content_images  # noqa: E402
 from article_writer import (  # noqa: E402
-    build_article_prompt,
-    detect_ai_phrases,
-    fetch_reference_articles,
+    ArticleValidationError,
     illustrate_article,
     llm_rank_topics,
-    local_fallback_article,
-    refs_to_prompt_block,
-    resolve_inline_images,
-    scrub_citations,
+    produce_article,
 )
 from generate_cover_ai import generate_ai_cover  # noqa: E402
 from http_util import close_all_sessions  # noqa: E402
-from llm_client import llm_chat, llm_config  # noqa: E402
+from llm_client import llm_config  # noqa: E402
 from markdown_to_wechat_html import (  # noqa: E402
     THEMES,
     build_preview_html,
@@ -302,37 +297,11 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
             ],
             "1",
         )
-        md_text = ""
+        paste_md = None
         if mode == "1":
-            # 抓取参考文章原文，让模型学真人语感（可用 .env ARTICLE_FETCH_REFS=0 关掉）
-            refs_block = ""
-            if os.getenv("ARTICLE_FETCH_REFS", "1") != "0":
-                materials = _load_search_materials(work_dir)
-                if materials:
-                    print("正在抓取参考文章原文（学习真实表达，不抄袭）…")
-                    refs = fetch_reference_articles(materials, topic)
-                    if refs:
-                        refs_block = refs_to_prompt_block(refs)
-                        (work_dir / "reference_articles.json").write_text(
-                            json.dumps(refs, ensure_ascii=False, indent=2),
-                            encoding="utf-8",
-                        )
-                        print(f"[参考] 抓到 {len(refs)} 篇原文，已保存 reference_articles.json")
-                    else:
-                        print("[参考] 未抓到可用原文，直接写作")
-            try:
-                print("正在写稿，请稍候…")
-                md_text = llm_chat(
-                    build_article_prompt(topic, topic.get("user_extra", ""), refs_block)
-                )
-            except Exception as e:
-                print(f"[写作失败] {e}")
-                if yes_no("改用本地提纲稿？", True):
-                    md_text = local_fallback_article(topic)
-                else:
-                    continue
+            prod_mode = "llm"
         elif mode == "2":
-            md_text = local_fallback_article(topic)
+            prod_mode = "fallback"
         else:
             print("请粘贴完整 Markdown（第一行建议 # 标题）。")
             print("粘贴结束后，在新的一行输入只有 END 三个字母并回车：")
@@ -345,38 +314,49 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
                 if line.strip() == "END":
                     break
                 lines.append(line)
-            md_text = "\n".join(lines).strip()
-            if not md_text:
+            paste_md = "\n".join(lines).strip()
+            if not paste_md:
                 print("没有读到内容，请重试")
                 continue
+            prod_mode = "paste"
 
-        # LLM 偶尔把全文包在 ```markdown 围栏里 → 整篇被渲染成代码框
-        from markdown_to_wechat_html import _strip_outer_fence
-        md_text = _strip_outer_fence(md_text)
-        if not md_text.lstrip().startswith("#"):
-            md_text = f"# {topic['title']}\n\n{md_text}"
-
-        # 兜底：删掉模型偶尔塞进正文的 [[1]](url) 引用角标（公众号里显示成链接文本）
-        md_text = scrub_citations(md_text)
-
-        # 写作时就地标注的配图：写完就地生图替换（图文一起出）；
-        # 未配置生图则清掉占位标记。无标记时原样返回，交给后面 _maybe_illustrate。
         try:
-            new_md, img_report = resolve_inline_images(md_text, work_dir)
-            if new_md != md_text:
-                md_text = new_md
-                for line in img_report:
-                    print(f"  {line}")
+            # CLI 默认严格校验；失败时询问是否宽松保留
+            result = produce_article(
+                topic, work_dir, mode=prod_mode, md_text=paste_md, log=print, strict_validation=True
+            )
+        except ArticleValidationError as e:
+            print("[写作校验] 本次模型输出未通过基础限制：")
+            for issue in e.issues:
+                print(f"  - {issue}")
+            if yes_no("是否重新生成？（选否将保留当前内容继续）", True):
+                continue
+            print("[提示] 已保留当前内容继续（可能结构/字数不完整）")
+            # 直接对已有正文做后处理落盘，避免再次请求 LLM
+            result = produce_article(
+                topic,
+                work_dir,
+                mode="paste",
+                md_text=e.md_text,
+                log=print,
+                strict_validation=False,
+            )
         except Exception as e:
-            print(f"[配图] 阶段出错（不影响正文）：{e}")
+            print(f"[写作失败] {e}")
+            if prod_mode != "llm":
+                continue
+            if yes_no("改用本地提纲稿？", True):
+                result = produce_article(
+                    topic, work_dir, mode="fallback", log=print, strict_validation=False
+                )
+            else:
+                continue
 
-        # AI 腔检测：命中过多时提示重写
-        hits = detect_ai_phrases(md_text)
+        md_text = result["md"]
+        out = Path(result["path"])
+        hits = result.get("ai_hits") or []
         if hits:
             print(f"[AI腔检测] 命中 {len(hits)} 个套话：{'、'.join(hits[:8])}")
-
-        out = work_dir / "article.md"
-        out.write_text(md_text, encoding="utf-8")
         title, _ = extract_title_and_body(md_text)
         print()
         print(f"[已保存] {out}")
@@ -420,18 +400,6 @@ def step_write_article(topic: dict, work_dir: Path) -> Path:
             topic.clear()
             topic.update(step_select_topic(work_dir))
             continue
-
-
-def _load_search_materials(work_dir: Path) -> list[dict]:
-    """读取本轮搜索原始素材（自定义主题模式下可能不存在）。"""
-    f = work_dir / "search_raw.json"
-    if not f.exists():
-        return []
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-        return data.get("materials") or []
-    except Exception:
-        return []
 
 
 def _maybe_illustrate(md_path: Path, work_dir: Path) -> None:

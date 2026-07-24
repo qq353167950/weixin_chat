@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from typing import Literal
 
-__version__ = "1.9.4"
+__version__ = "2.0.0"
 
 GITHUB_REPO = "qq353167950/weixin_chat"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"

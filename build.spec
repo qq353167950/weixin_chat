@@ -22,6 +22,8 @@ IS_WIN = sys.platform == "win32"
 datas = [
     ("gui/index.html", "gui"),
     (".env.example", "."),
+    ("assets/app.png", "assets"),
+    ("assets/app.ico", "assets"),
 ]
 hiddenimports = [
     # ddgs 兜底搜索为动态导入，静态分析发现不了
