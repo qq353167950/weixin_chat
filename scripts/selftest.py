@@ -328,13 +328,32 @@ def test_article_quality_limits() -> None:
 
 def test_version_compare() -> None:
     print("[8] 版本号比较（更新链路基石）")
-    from version import compare_version
+    from version import _friendly_http_error, _parse_atom_latest, compare_version
+    import urllib.error
 
     check("1.2.3 < 1.2.4", compare_version("1.2.3", "1.2.4") == -1)
     check("1.10.0 > 1.9.9", compare_version("1.10.0", "1.9.9") == 1)
     check("相等", compare_version("1.6.3", "1.6.3") == 0)
     check("带 v 前缀", compare_version("v1.2.3", "1.2.4") == -1)
     check("带后缀 -beta", compare_version("1.2.3-beta", "1.2.3") == 0)
+
+    atom = (
+        '<?xml version="1.0"?><feed><entry>'
+        "<title>v2.1.0</title>"
+        '<link href="https://github.com/x/y/releases/tag/v2.1.0"/>'
+        "<content type=\"html\">&lt;ul&gt;&lt;li&gt;新增：A&lt;/li&gt;&lt;/ul&gt;</content>"
+        "</entry></feed>"
+    )
+    ver, page, log = _parse_atom_latest(atom)
+    check("Atom 解析版本", ver == "2.1.0", ver)
+    check("Atom 解析日志", "新增：A" in log, log)
+    check("Atom 解析链接", "v2.1.0" in page, page)
+
+    rate = urllib.error.HTTPError(
+        "https://api.github.com/", 403, "rate limit exceeded", hdrs=None, fp=None  # type: ignore[arg-type]
+    )
+    msg = _friendly_http_error(rate)
+    check("限流错误不叫纯网络失败", "限流" in msg or "次数" in msg, msg)
 
 
 def test_friendly_changelog() -> None:
