@@ -293,7 +293,8 @@ def build_article_prompt(
         "【结构要求】\n"
         "1) 第一行是 Markdown 一级标题：# 标题——14-24 字，突出最抓人的一个点，"
         "可适度夸张制造好奇/反差，但不虚构；禁止论文腔和「XX：YY」冒号双段式\n"
-        "2) 3-5 个 ## 小标题，短而有力；每节可用 > 引用块放一句核心观点\n"
+        "2) ## 小标题按内容需要写，短而有力，一般 3-8 个，最多不超过 10 个；"
+        "每节可用 > 引用块放一句核心观点\n"
         "3) 操作步骤用 1. 2. 3. 有序列表，要点用 - 列表\n"
         "4) 关键结论 **加粗**，每节至多 2 处\n"
         "5) 结尾自然收束即可：可以是一个观点、一句留白或对读者的真诚提醒，"
@@ -412,8 +413,8 @@ def validate_generated_article(
         issues.append(f"一级标题应为 1 个，实际 {len(h1)} 个")
     if not h2:
         issues.append("缺少二级小标题")
-    elif not 3 <= len(h2) <= 5:
-        issues.append(f"二级小标题应为 3-5 个，实际 {len(h2)} 个")
+    elif len(h2) > 10:
+        issues.append(f"二级小标题最多 10 个，实际 {len(h2)} 个")
     chars = article_text_char_count(md_text)
     if chars < min_chars or chars > max_chars:
         issues.append(
