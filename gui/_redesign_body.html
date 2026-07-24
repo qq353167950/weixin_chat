@@ -124,10 +124,6 @@
       </div>
       <div style="height:12px"></div>
       <div class="console" id="log-article"></div>
-      <div class="ai-hits-panel" id="ai-hits-panel">
-        <div class="ai-hits-title">检测到的 AI 腔词语 · 点击可在编辑器中定位</div>
-        <div class="ai-hits-list" id="ai-hits-list"></div>
-      </div>
     </div>
     <div class="card" id="editor-card" style="display:none">
       <div class="row" style="justify-content:space-between; margin-bottom:12px">
@@ -139,6 +135,18 @@
           <button class="btn secondary" id="btn-save-md" data-label="保存修改"><i data-lucide="save"></i>保存修改</button>
           <button class="btn primary-glow" id="btn-goto-cover" data-label="下一步：封面"><i data-lucide="arrow-right"></i>下一步：封面</button>
         </div>
+      </div>
+      <!-- 命中条放在编辑器卡片内并 sticky：定位后仍可连点，不必反复上滑 -->
+      <div class="ai-hits-panel" id="ai-hits-panel">
+        <div class="ai-hits-title-row">
+          <div class="ai-hits-title">AI 腔词语 · 点击定位，再点同一词跳下一处</div>
+          <div class="ai-hits-nav" id="ai-hits-nav" style="display:none">
+            <button type="button" class="mini-btn" id="ai-hit-prev" title="上一处">上一处</button>
+            <span class="muted" id="ai-hit-pos" style="font-size:12px;min-width:4.5em;text-align:center"></span>
+            <button type="button" class="mini-btn" id="ai-hit-next" title="下一处">下一处</button>
+          </div>
+        </div>
+        <div class="ai-hits-list" id="ai-hits-list"></div>
       </div>
       <div class="md-toolbar" id="md-toolbar">
         <button data-md="bold" title="加粗（**文字**）"><b>B</b></button>

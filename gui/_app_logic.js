@@ -415,18 +415,43 @@ async function loadArticle() {
   await maybeRestoreDraft();   // 异常退出留下的本地草稿比服务端新时提示恢复
 }
 
+/* AI 腔定位状态：按词缓存全部出现位置，支持循环下一处 / 上一处 */
+const _aiSeek = { phrase: "", indices: [], i: -1 };
+
+function _aiPhraseIndices(text, phrase) {
+  if (!phrase) return [];
+  const out = [];
+  let from = 0;
+  while (from <= text.length) {
+    const idx = text.indexOf(phrase, from);
+    if (idx < 0) break;
+    out.push(idx);
+    from = idx + Math.max(phrase.length, 1);
+  }
+  return out;
+}
+
+function _aiCountPhrase(text, phrase) {
+  return _aiPhraseIndices(text, phrase).length;
+}
+
 function showAiChip(hits) {
   const chip = $("#chip-ai");
   const panel = $("#ai-hits-panel");
   const list = $("#ai-hits-list");
+  const nav = $("#ai-hits-nav");
   chip.style.display = "";
   hits = Array.isArray(hits) ? hits : [];
+  // 重新检测时清空定位游标，避免旧正文偏移
+  _aiSeek.phrase = "";
+  _aiSeek.indices = [];
+  _aiSeek.i = -1;
   if (hits.length) {
     chip.className = "chip warn";
     chip.textContent = `AI腔 ${hits.length} 处：${hits.slice(0, 6).join("、")}`;
     chip.title = hits.join("、");
     $("#btn-deai").style.display = "";      // 有命中才亮出一键去味
-    // 列出全部命中词，点击定位到编辑器中的下一处
+    // 列出全部命中词；点同一词循环跳转各处，不必上滑找列表
     if (panel && list) {
       panel.classList.add("show");
       list.innerHTML = "";
@@ -435,8 +460,8 @@ function showAiChip(hits) {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "ai-hit-btn";
-        const count = md.split(phrase).length - 1;
-        btn.innerHTML = "";
+        btn.dataset.phrase = phrase;
+        const count = _aiCountPhrase(md, phrase);
         const label = document.createElement("span");
         label.textContent = phrase;
         btn.appendChild(label);
@@ -446,10 +471,15 @@ function showAiChip(hits) {
           c.textContent = "×" + count;
           btn.appendChild(c);
         }
-        btn.title = "点击定位到文中「" + phrase + "」";
-        btn.addEventListener("click", () => jumpToAiPhrase(phrase));
+        btn.title = count > 1
+          ? `点击定位「${phrase}」（共 ${count} 处，再点下一处）`
+          : `点击定位到文中「${phrase}」`;
+        btn.addEventListener("click", () => jumpToAiPhrase(phrase, +1));
         list.appendChild(btn);
       });
+      if (nav) nav.style.display = "none";
+      const pos = $("#ai-hit-pos");
+      if (pos) pos.textContent = "";
     }
   } else {
     chip.className = "chip ok";
@@ -460,44 +490,187 @@ function showAiChip(hits) {
       panel.classList.remove("show");
       list.innerHTML = "";
     }
+    if (nav) nav.style.display = "none";
   }
 }
 
-/* 在 Markdown 编辑器中定位并选中 AI 腔词语（从上次位置继续找下一处） */
-const _aiSeekPos = {};
-function jumpToAiPhrase(phrase) {
+function _markActiveAiHit(phrase) {
+  document.querySelectorAll(".ai-hit-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.phrase === phrase);
+  });
+}
+
+function _updateAiHitNav(phrase, index, total) {
+  const nav = $("#ai-hits-nav");
+  const pos = $("#ai-hit-pos");
+  if (!nav || !pos) return;
+  if (!phrase || total <= 0) {
+    nav.style.display = "none";
+    pos.textContent = "";
+    return;
+  }
+  nav.style.display = "inline-flex";
+  pos.textContent = total > 1 ? `${index + 1}/${total}` : "1/1";
+  const prev = $("#ai-hit-prev");
+  const next = $("#ai-hit-next");
+  // 只有一处时仍可点，等同再定位；多处时循环
+  if (prev) prev.disabled = false;
+  if (next) next.disabled = false;
+}
+
+function _scrollTextareaToIndex(ed, text, idx) {
+  // 用镜像测量真实行高/换行，避免固定 22px 估偏
+  try {
+    const style = window.getComputedStyle(ed);
+    const mirror = document.createElement("div");
+    const cs = [
+      "box-sizing", "width", "padding-top", "padding-right", "padding-bottom", "padding-left",
+      "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+      "font-family", "font-size", "font-weight", "font-style", "letter-spacing",
+      "line-height", "text-transform", "word-spacing", "white-space", "word-break",
+      "overflow-wrap", "tab-size",
+    ];
+    cs.forEach((k) => { mirror.style.setProperty(k, style.getPropertyValue(k)); });
+    mirror.style.position = "absolute";
+    mirror.style.visibility = "hidden";
+    mirror.style.pointerEvents = "none";
+    mirror.style.height = "auto";
+    mirror.style.maxHeight = "none";
+    mirror.style.overflow = "hidden";
+    mirror.style.whiteSpace = "pre-wrap";
+    mirror.style.wordWrap = "break-word";
+    mirror.style.top = "0";
+    mirror.style.left = "-99999px";
+    // 选区前的文本 + 标记
+    const marker = document.createElement("span");
+    marker.textContent = "\u200b";
+    mirror.textContent = text.slice(0, idx);
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const top = marker.offsetTop;
+    const lineH = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.5) || 22;
+    document.body.removeChild(mirror);
+    const pad = parseFloat(style.paddingTop) || 0;
+    ed.scrollTop = Math.max(0, top - pad - lineH * 3);
+  } catch (_) {
+    const before = text.slice(0, idx);
+    const lines = before.split("\n").length;
+    ed.scrollTop = Math.max(0, (lines - 4) * 22);
+  }
+}
+
+/* 在 Markdown 编辑器中定位并选中 AI 腔词语。
+ * delta=+1 下一处 / -1 上一处；同一词连点会循环，不把整页滚走。 */
+function jumpToAiPhrase(phrase, delta = 1) {
   const ed = $("#md-editor");
   if (!ed) return;
   const text = ed.value || "";
-  if (!phrase || !text.includes(phrase)) {
-    toast("正文里暂时找不到「" + phrase + "」");
-    return;
-  }
-  // 确保编辑器可见
+  if (!phrase) return;
+
+  // 确保编辑器卡片可见，但尽量不把命中条滚出视口
   const card = $("#editor-card");
   if (card && card.style.display === "none") card.style.display = "";
-  let from = _aiSeekPos[phrase] || 0;
-  let idx = text.indexOf(phrase, from);
-  if (idx < 0) {
-    from = 0;
-    idx = text.indexOf(phrase, 0);
+
+  let indices = _aiSeek.indices;
+  if (_aiSeek.phrase !== phrase || !indices.length) {
+    indices = _aiPhraseIndices(text, phrase);
+    _aiSeek.phrase = phrase;
+    _aiSeek.indices = indices;
+    // 新词：+1 从第 0 处开始；-1 从最后一处
+    _aiSeek.i = delta < 0 ? indices.length : -1;
+  } else {
+    // 正文可能已改：刷新索引，尽量贴近旧位置
+    const oldIdx = indices[_aiSeek.i];
+    indices = _aiPhraseIndices(text, phrase);
+    _aiSeek.indices = indices;
+    if (!indices.length) {
+      _aiSeek.i = -1;
+    } else if (oldIdx == null) {
+      _aiSeek.i = delta < 0 ? indices.length : -1;
+    } else {
+      // 找到 >= 旧偏移 的最近项，再按 delta 走
+      let nearest = 0;
+      for (let k = 0; k < indices.length; k++) {
+        if (indices[k] >= oldIdx) { nearest = k; break; }
+        nearest = k;
+      }
+      _aiSeek.i = nearest;
+      // 若仍停在同一处且要向后，下面 delta 会推进
+      if (delta > 0 && indices[_aiSeek.i] === oldIdx) {
+        /* keep i, then +delta */
+      } else if (delta < 0 && indices[_aiSeek.i] === oldIdx) {
+        /* keep i, then +delta */
+      } else {
+        // 文本变动后已落在新位置，先展示再决定是否步进
+        delta = 0;
+      }
+    }
   }
-  if (idx < 0) return;
-  _aiSeekPos[phrase] = idx + phrase.length;
-  ed.focus();
-  ed.setSelectionRange(idx, idx + phrase.length);
-  // 滚到选区附近（textarea 近似）
+
+  if (!indices.length) {
+    toast("正文里暂时找不到「" + phrase + "」");
+    _markActiveAiHit("");
+    _updateAiHitNav("", -1, 0);
+    return;
+  }
+
+  const n = indices.length;
+  let i = _aiSeek.i;
+  if (delta === 0) {
+    if (i < 0 || i >= n) i = 0;
+  } else {
+    i = (i + delta) % n;
+    if (i < 0) i += n;
+  }
+  _aiSeek.i = i;
+  const idx = indices[i];
+
+  // 记录页面滚动，避免 focus 把整页拽到编辑器底、命中条消失
+  const pageX = window.scrollX, pageY = window.scrollY;
   try {
-    const before = text.slice(0, idx);
-    const lines = before.split("\n").length;
-    const lineHeight = 22;
-    ed.scrollTop = Math.max(0, (lines - 4) * lineHeight);
-  } catch (_) {}
+    ed.focus({ preventScroll: true });
+  } catch (_) {
+    ed.focus();
+  }
+  ed.setSelectionRange(idx, idx + phrase.length);
+  _scrollTextareaToIndex(ed, text, idx);
+  // 若浏览器仍带动了页面滚动，拉回（命中条在编辑器卡片内 sticky）
+  requestAnimationFrame(() => {
+    window.scrollTo(pageX, pageY);
+    // 若命中条几乎不可见，只把卡片顶部轻轻滚进视口，不居中猛滑
+    const panel = $("#ai-hits-panel");
+    if (panel && panel.classList.contains("show")) {
+      const pr = panel.getBoundingClientRect();
+      if (pr.bottom < 40 || pr.top > window.innerHeight - 40) {
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  });
+
   ed.classList.remove("ai-flash");
   void ed.offsetWidth;
   ed.classList.add("ai-flash");
   setTimeout(() => ed.classList.remove("ai-flash"), 900);
-  toast("已定位：「" + phrase + "」· 再点可跳下一处", 2200);
+
+  _markActiveAiHit(phrase);
+  _updateAiHitNav(phrase, i, n);
+  if (n > 1) {
+    toast(`「${phrase}」第 ${i + 1}/${n} 处 · 再点下一处`, 2000);
+  } else {
+    toast(`已定位：「${phrase}」`, 1600);
+  }
+}
+
+// 上一处 / 下一处（相对当前选中词）
+if ($("#ai-hit-prev")) {
+  $("#ai-hit-prev").addEventListener("click", () => {
+    if (_aiSeek.phrase) jumpToAiPhrase(_aiSeek.phrase, -1);
+  });
+}
+if ($("#ai-hit-next")) {
+  $("#ai-hit-next").addEventListener("click", () => {
+    if (_aiSeek.phrase) jumpToAiPhrase(_aiSeek.phrase, +1);
+  });
 }
 
 /* 手动检测 AI 味（对编辑器当前内容） */

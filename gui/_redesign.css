@@ -590,18 +590,30 @@ label.field .fhint {
   display: inline-flex; align-items: center; gap: 6px;
 }
 
-/* AI 腔命中定位列表 */
+/* AI 腔命中定位列表：贴在编辑器上方，滚动页面时尽量保持可见 */
 .ai-hits-panel {
   display: none;
-  margin-top: 12px;
+  margin: 0 0 12px;
   padding: 12px 14px;
   border-radius: var(--radius-m);
   background: rgba(255,149,0,0.08);
   border: 1px solid rgba(255,149,0,0.18);
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .ai-hits-panel.show { display: block; }
+.ai-hits-title-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+}
 .ai-hits-panel .ai-hits-title {
-  font-size: 12px; font-weight: 600; color: #b25000; margin-bottom: 8px;
+  font-size: 12px; font-weight: 600; color: #b25000; margin: 0;
+}
+.ai-hits-nav {
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .ai-hits-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .ai-hit-btn {
@@ -614,6 +626,11 @@ label.field .fhint {
 .ai-hit-btn:hover {
   background: rgba(255,149,0,0.15);
   border-color: rgba(255,149,0,0.55);
+}
+.ai-hit-btn.active {
+  background: rgba(255,149,0,0.22);
+  border-color: rgba(255,149,0,0.7);
+  box-shadow: 0 0 0 2px rgba(255,149,0,0.18);
 }
 .ai-hit-btn .cnt {
   font-weight: 500; color: var(--ink-2); margin-left: 4px; font-size: 11px;
