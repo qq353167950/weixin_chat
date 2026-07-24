@@ -52,6 +52,9 @@ jobs:
           }
           Write-Host "版本一致：v$codeVer"
 
+      - name: 生成 Windows 版本资源（嵌入 exe 版本号，利于图标缓存刷新）
+        run: python scripts/gen_version_info.py
+
       - name: PyInstaller 打包 exe
         run: pyinstaller build.spec --noconfirm --clean
 

@@ -10,6 +10,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 ".venv\Scripts\python.exe" -m pip install -q -r requirements.txt pyinstaller
+".venv\Scripts\python.exe" scripts\gen_version_info.py
 ".venv\Scripts\python.exe" -m PyInstaller build.spec --noconfirm --clean
 if errorlevel 1 (
   echo [ERROR] build failed

@@ -21,6 +21,7 @@ runs/
 # PyInstaller 构建产物（build.spec 本身入库）
 build/
 dist/
+version_info.txt
 
 # 内置更新下载的安装包
 update/

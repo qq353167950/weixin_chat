@@ -12,12 +12,16 @@
 # CI 构建：.github/workflows/build.yml
 
 import sys
+from pathlib import Path
 
 sys.path.insert(0, "scripts")
 from version import __version__ as APP_VERSION  # noqa: E402
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
+
+# Windows 版本资源：先跑 python scripts/gen_version_info.py（CI/本地 build 脚本会调用）
+_VERSION_INFO = "version_info.txt" if (IS_WIN and Path("version_info.txt").is_file()) else None
 
 datas = [
     ("gui/index.html", "gui"),
@@ -76,6 +80,7 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,      # 桌面程序：无控制台黑窗，日志落数据目录 app.log
     icon="assets/app.icns" if IS_MAC else "assets\\app.ico",
+    version=_VERSION_INFO,  # 嵌入 FileVersion，利于覆盖安装后刷新壳图标
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
