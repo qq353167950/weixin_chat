@@ -41,8 +41,8 @@ DisableDirPage=no
 OutputDir=..\dist
 OutputBaseFilename=公众号助手-安装包-v{#MyAppVersion}
 SetupIconFile=..\assets\app.ico
-; 控制面板「程序和功能」与卸载列表图标：直接用主程序 exe（与桌面快捷方式一致）
-UninstallDisplayIcon={app}\{#MyAppExeName}
+; 控制面板「程序和功能」与卸载列表图标：用安装目录独立 app.ico（与快捷方式一致）
+UninstallDisplayIcon={app}\app.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -58,6 +58,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; 独立 ico：快捷方式/卸载列表直接引用，不依赖 exe 资源解析路径（利于覆盖安装后刷新）
+Source: "..\assets\app.ico"; DestDir: "{app}"; DestName: "app.ico"; Flags: ignoreversion
 
 [UninstallDelete]
 ; 卸载时清运行期缓存；用户数据（.env / runs）保留
@@ -68,10 +70,10 @@ Type: files; Name: "{app}\app.log.1"
 Type: files; Name: "{app}\ui_state.json"
 
 [Icons]
-; 所有快捷方式强制 IconFilename 指向主程序，避免沿用旧壳缓存/卸载器默认图
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0
-Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0; Tasks: desktopicon
+; 快捷方式统一指向 {app}\app.ico（多尺寸 BMP+PNG），避免 unins 默认图与 exe 壳缓存不一致
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app.ico"; IconIndex: 0
+Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\app.ico"; IconIndex: 0
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app.ico"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 ; skipifsilent：静默更新由 run_update.bat 明确启动新版，避免双开
